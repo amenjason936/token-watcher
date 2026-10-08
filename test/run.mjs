@@ -1740,6 +1740,16 @@ console.log('\n[13] Claude 官方配额单元');
   ok('cursor cache_write 列独立成项', rows[2].cache_write === 100 && rows[2].total_tokens === 370, JSON.stringify(rows[2]));
   ok('cursor 同值重复行指纹互异', new Set(rows.map(r => r.dedup_key)).size === 3, JSON.stringify(rows.map(r => r.dedup_key)));
   ok('cursor 坏表头返回空数组（接口改版≠乱入账）', cur.parseCursorCsv('a,b\n1,2').length === 0);
+  // effort 档别名：入库 model 归并到本体（配上单价、跨工具合段），
+  // 但 dedup_key 必须保留 CSV 原始 id——否则别名落地当刻起旧账重放会全部双计
+  {
+    const opusRows = cur.parseCursorCsv([
+      'Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens',
+      '"2026-10-08T03:00:00.000Z","claude-opus-5-5-medium","10","20","30","40"',
+    ].join('\n'));
+    ok('cursor effort 档 id 归并（model 列→本体）', opusRows[0]?.model === 'claude-opus-5-5', JSON.stringify(opusRows[0]));
+    ok('cursor dedup 指纹保留原始 id（别名不破坏幂等）', (opusRows[0]?.dedup_key || '').includes('claude-opus-5-5-medium'), opusRows[0]?.dedup_key);
+  }
   {
     const { Store } = await import(pathToFileURL(join(ROOT, 'src/store.js')).href);
     const cHome = mkdtempSync(join(tmpdir(), 'tokenmeter-cursor-'));

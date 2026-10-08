@@ -7,6 +7,10 @@
 const ALIASES = {
   'deepseek-flash': 'deepseek-v4.1-flash',     // V4.1 Flash 沿用旧 id
   'deepseek-v4-flash': 'deepseek-v4.1-flash',  // V4 Flash 线已下线，请求路由至 V4.1 Flash
+  // Cursor 账单把 effort 档写进模型 id（Opus 5.5 Medium）；Anthropic 不按 effort 档定价，
+  // 归并到本体才能配上单价并与其它工具的同模型合段。dedup 指纹仍用 CSV 原始 id，别名
+  // 改动不影响已入库事件的重放幂等。
+  'claude-opus-5-5-medium': 'claude-opus-5-5',
 };
 
 export function normalizeModel(m) {
