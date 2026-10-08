@@ -1740,15 +1740,29 @@ console.log('\n[13] Claude 官方配额单元');
   ok('cursor cache_write 列独立成项', rows[2].cache_write === 100 && rows[2].total_tokens === 370, JSON.stringify(rows[2]));
   ok('cursor 同值重复行指纹互异', new Set(rows.map(r => r.dedup_key)).size === 3, JSON.stringify(rows.map(r => r.dedup_key)));
   ok('cursor 坏表头返回空数组（接口改版≠乱入账）', cur.parseCursorCsv('a,b\n1,2').length === 0);
-  // effort 档别名：入库 model 归并到本体（配上单价、跨工具合段），
-  // 但 dedup_key 必须保留 CSV 原始 id——否则别名落地当刻起旧账重放会全部双计
+  // id 归并规则：cursor- 代理前缀 + effort 档后缀（含组合档）剥除，归并到各自主模型；
+  // dedup_key 必须保留 CSV 原始 id——否则规则落地当刻起旧账重放会全部双计
   {
+    const { normalizeModel } = await import(pathToFileURL(join(ROOT, 'src/models.js')).href);
+    ok('effort 档剥除（opus-medium → opus）', normalizeModel('claude-opus-5-5-medium') === 'claude-opus-5-5', normalizeModel('claude-opus-5-5-medium'));
+    ok('cursor- 前缀 + effort 档剥除', normalizeModel('cursor-grok-4.6-medium') === 'grok-4.6', normalizeModel('cursor-grok-4.6-medium'));
+    ok('组合档位迭代剥除', normalizeModel('cursor-grok-4.6-medium-high') === 'grok-4.6', normalizeModel('cursor-grok-4.6-medium-high'));
+    ok('非档位后缀不动（build/-1/free 是名字的一部分）', normalizeModel('grok-4.7-build') === 'grok-4.7-build'
+      && normalizeModel('kimi-k3-1') === 'kimi-k3-1' && normalizeModel('mimo-v2.5-free') === 'mimo-v2.5-free',
+      `${normalizeModel('grok-4.7-build')} ${normalizeModel('kimi-k3-1')}`);
+    ok('残名不剥成空串', normalizeModel('medium') === 'medium' && normalizeModel('High') === 'high',
+      `${normalizeModel('medium')} ${normalizeModel('High')}`);
+    ok('grok-bot-* 是产品线 id 非 effort 变体，不受规则影响', normalizeModel('grok-bot-cua') === 'grok-bot-cua', normalizeModel('grok-bot-cua'));
     const opusRows = cur.parseCursorCsv([
       'Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens',
       '"2026-10-08T03:00:00.000Z","claude-opus-5-5-medium","10","20","30","40"',
+      '"2026-09-20T15:54:30.603Z","cursor-grok-4.6-medium-high","0","28375","52096","706"',
     ].join('\n'));
-    ok('cursor effort 档 id 归并（model 列→本体）', opusRows[0]?.model === 'claude-opus-5-5', JSON.stringify(opusRows[0]));
-    ok('cursor dedup 指纹保留原始 id（别名不破坏幂等）', (opusRows[0]?.dedup_key || '').includes('claude-opus-5-5-medium'), opusRows[0]?.dedup_key);
+    ok('cursor CSV 入库走归并（model 列→主模型）', opusRows[0]?.model === 'claude-opus-5-5' && opusRows[1]?.model === 'grok-4.6',
+      JSON.stringify(opusRows.map(r => r.model)));
+    ok('cursor dedup 指纹保留原始 id（归并不破坏幂等）', (opusRows[0]?.dedup_key || '').includes('claude-opus-5-5-medium')
+      && (opusRows[1]?.dedup_key || '').includes('cursor-grok-4.6-medium-high'),
+      JSON.stringify(opusRows.map(r => r.dedup_key)));
   }
   {
     const { Store } = await import(pathToFileURL(join(ROOT, 'src/store.js')).href);
