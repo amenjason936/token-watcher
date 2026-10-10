@@ -9,14 +9,25 @@
 const BAD_WORDS = ['fuck', 'shit', 'bitch', 'asshole', 'cunt', 'dick', 'nigg', 'spam',
   'admin', '官方', '管理员', '运营'];
 
+/** 链接/导流：域名后缀或 www./http 前缀（大小写不敏感） */
+const LINK_RE = /(https?:\/\/|www\.)|(\.(com|cn|net|org|io|dev|app|xyz|me|cc)\b)/i;
+
+/**
+ * 模型 / 工具名同样公开展示在榜单上：只认 ASCII 标识符形状（glm-5.3、openrouter/x-ai/grok-4），
+ * 含链接或黑名单词的整条丢弃——否则它们是绕过昵称清洗的自由文本通道。
+ */
+const LABEL_RE = /^[a-z0-9][a-z0-9._:\/+-]*$/i;
+const okLabel = (s) => LABEL_RE.test(s) && !LINK_RE.test(s)
+  && !BAD_WORDS.some(w => s.toLowerCase().includes(w));
+
 /** 昵称校验/清洗：1-16 个字符（按码点），非法返回 null */
 export function sanitizeName(raw) {
   const s = String(raw ?? '')
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\ufeff]/g, '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return null;
-  if (/(https?:\/\/|www\.)|(\.(com|cn|net|org|io|dev|app|xyz|me|cc)\b)/i.test(s)) return null;
+  if (LINK_RE.test(s)) return null;
   if (s.includes('@')) return null;
   const low = s.toLowerCase();
   if (BAD_WORDS.some(w => low.includes(w))) return null;
@@ -29,8 +40,9 @@ export function sanitizeName(raw) {
 export function clampReport(r) {
   const int = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
   const shares = (arr) => (Array.isArray(arr) ? arr : []).slice(0, 8)
-    .filter(p => Array.isArray(p) && typeof p[0] === 'string' && p[0])
-    .map(([m, v]) => [m.slice(0, 60), Math.max(0, Math.min(100, Math.round(Number(v) || 0)))]);
+    .filter(p => Array.isArray(p) && typeof p[0] === 'string')
+    .map(([m, v]) => [m.slice(0, 60), Math.max(0, Math.min(100, Math.round(Number(v) || 0)))])
+    .filter(([m]) => okLabel(m));
   const periodModels = Object.fromEntries(['day', 'week', 'month']
     .filter(period => Array.isArray(r?.models_by_period?.[period]))
     .map(period => [period, shares(r.models_by_period[period]).slice(0, 1)]));

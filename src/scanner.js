@@ -119,7 +119,9 @@ export class Scanner extends EventEmitter {
           ? basename(path).replace(/\.jsonl(?:\.(?:zst|zstd))?$/i, '')
           : basename(path, '.jsonl'));
         const row = this.store.getFile(path);
-        const prev = row?.state_json ? JSON.parse(row.state_json) : undefined;
+        let prev;
+        // 坏的 state 只该让这一个文件全量重扫，不能抛出去中断整轮扫描
+        try { prev = row?.state_json ? JSON.parse(row.state_json) : undefined; } catch { prev = undefined; }
         // 采集器版本落后 → 全量重扫补数据（dedup 幂等，仅一次性成本）
         const needFull = !prev || prev._v !== src.version;
         // mtime 跳过仅用于文件型源（sqlite 的 WAL 写入不改变主文件 mtime），且须版本一致
@@ -132,12 +134,24 @@ export class Scanner extends EventEmitter {
           ? (needFull || compressedSnapshot || s.size < cursor ? 0 : cursor)
           : 0;
 
-        this.store.db.exec('BEGIN');
+        const fail = (err) => {
+          st.parse_errors++;
+          st.last_error = `${new Date().toISOString()} ${err.message}`;
+          this.log(`parse error ${path}: ${err.message}`);
+        };
+        // 先在事务外解析（含 await 读文件），写入只记下；事务里同步回放。
+        // 事务若跨 await，同一连接上轮询器的写入会落进来、随解析失败一起被回滚。
+        const staged = this.store.stageWrites();
+        let r;
         try {
-          const r = await COLLECTORS[src.collector](this.store, {
+          r = await COLLECTORS[src.collector](staged.store, {
             tool: src.tool, path, fileId, offset, state, version: src.version,
           });
-          inserted += r.inserted;
+        } catch (err) { fail(err); continue; }
+
+        this.store.db.exec('BEGIN');
+        try {
+          inserted += staged.replay();
           this.store.saveFile({
             path, tool: src.tool, session_id: fileId, size: s.size,
             mtime_ms: s.mtimeMs,
@@ -147,9 +161,7 @@ export class Scanner extends EventEmitter {
           this.store.db.exec('COMMIT');
         } catch (err) {
           this.store.db.exec('ROLLBACK');
-          st.parse_errors++;
-          st.last_error = `${new Date().toISOString()} ${err.message}`;
-          this.log(`parse error ${path}: ${err.message}`);
+          fail(err);
         }
       }
       this._pruneMissingFiles(src.tool, seen, liveRoots);
@@ -218,12 +230,21 @@ export class Scanner extends EventEmitter {
         changed = true;
       }
     }
-    // 统一回填事件 + 持久化 state
-    for (const r of rows) {
-      const st = states.get(r.session_id);
-      if (!st) continue;
-      if (st.model) updState.run(st.model, r.session_id);
-      this.store.saveFile({ ...r, state_json: JSON.stringify(st) });
+    // 统一回填事件 + 持久化 state。每轮扫描都会走到这里（活跃时约每秒一次）：
+    // 只写真正变化的 files 行，并合进一个事务——否则每个 Codex 会话每轮各一次自动提交。
+    db.exec('BEGIN');
+    try {
+      for (const r of rows) {
+        const st = states.get(r.session_id);
+        if (!st) continue;
+        if (st.model) updState.run(st.model, r.session_id); // 走 session 索引，无 NULL 行时不改任何数据
+        const json = JSON.stringify(st);
+        if (json !== r.state_json) this.store.saveFile({ ...r, state_json: json });
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      this.log(`codex model backfill: ${err.message}`);
     }
   }
 

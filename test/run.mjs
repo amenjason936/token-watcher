@@ -1932,6 +1932,7 @@ await (await import('./codex-zstd.mjs')).testCodexZstd(ok);
 await (await import('./date-ranges.mjs')).testDateRanges(ok);
 await (await import('./dsh-dedup.mjs')).testDshDedup(ok);
 await (await import('./stall-guard.mjs')).testStallGuard(ok);
+await (await import('./review-fixes.mjs')).testReviewFixes(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });

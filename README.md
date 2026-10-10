@@ -89,7 +89,6 @@ Long-term:
 npm install -g token-watcher
 token-watcher serve
 token-watcher install-agent             # launchd auto-start (macOS)
-token-watcher bar                       # menu-bar capsule
 token-watcher bar                       # macOS menu-bar capsule
 ```
 
