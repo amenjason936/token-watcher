@@ -5,13 +5,15 @@
 用户明确授权合并 PR #2、提交推送补充修复并发布新版本；沿用本轮已确认的隔离合成数据库测试与临时文件清理范围。
 
 1. [x] 核对远端 main、PR 提交、GitHub/npm 版本和发布账号状态；目标为补丁版本 1.8.4。
-2. [ ] 完成 PR CI 并合并；提交日期窗口等补充修复，保留本地 Cursor 修复和贡献者提交历史。
-3. [ ] 完成版本回归、universal 菜单栏构建、打包与干净安装验证，推送代码并检查 CI。
-4. [ ] 创建 v1.8.4 标签和 GitHub Release，上传安装包及校验文件；恢复 npm 认证、发布并核对 registry。
+2. [x] 完成 PR CI 并合并；提交日期窗口等补充修复，保留本地 Cursor 修复和贡献者提交历史。
+3. [x] 完成版本回归、universal 菜单栏构建、打包与干净安装验证，推送代码并检查 CI。
+4. [x] 创建 v1.8.4 标签和 GitHub Release，上传安装包及校验文件；恢复 npm 认证、发布并核对 registry。
 
 预检：npm latest 为 1.8.3，GitHub 最近 Release 为 v1.8.0；npm whoami 返回 E401，须在产物就绪后重新认证。PR #2 的首次贡献者 CI 已获准运行。
 
 发布预验收：PR #2 三平台/Node 22.13 与 24 的 10 个 CI 任务全部通过，已通过保留提交历史的 merge 合并为 `f722222ff26cf5b93aed0b0aa545d2c139e1716c`。1.8.4 本地完整回归 644 项通过；prepack 构建 arm64 + x86_64，61 个包内文件逐字节匹配工作区，干净安装后的 CLI 版本及 8 个资源/API 端点通过。安装包与 SHA256SUMS 位于 `/private/tmp/token-watcher-pr2-KyI6bp/release/`。
+
+发布完成（2026-10-10）：补充修复提交 `6bd611f`，与 PR 历史整合后为 `dd0c6d2294888686ebce66e91610cb151927d1f3`，已推送 main；v1.8.4 标签指向该发布提交。最终代码 CI [38034740378](https://github.com/luwill/token-watcher/actions/runs/38034740378) 的 10 个任务全部成功。用户完成 npm 登录与发布双重验证后，registry 已确认 `version=1.8.4`、`latest=1.8.4`，SHA-1/SHA-512 与本地安装包一致。公开 [GitHub Release](https://github.com/luwill/token-watcher/releases/tag/v1.8.4) 含安装包和 SHA256SUMS；安装包 SHA-256 为 `176024561414c83a2ab08dc816c425b2bcb42b3c8b0ea249ab4db1b892dc9689`。本次不重启正式服务、不改真实数据库或云端历史。
 
 ## 2026-10-10 Codex 压缩日志与统计窗口反馈
 
@@ -26,7 +28,7 @@
 验收（macOS，Node 24.14.0）：18 项定向检查、644 项完整回归均通过，0 失败。另有 52 个 JS/MJS 文件语法、三种文件后缀及 Windows 工具调用去重键、zstd CLI/Node 单帧与多帧安全检查、Asia/Taipei/UTC/纽约春秋夏令时边界、`git diff --check` 通过。`npm pack --dry-run --ignore-scripts` 确认 61 个打包文件中包含新模块及恢复说明。没有新增依赖，未变更发布版本。
 
 完整回归使用独立 HOME/XDG/临时目录；CLI 子进程离线，父进程仅放行回环 HTTP，拦截真实外网 fetch，允许套件中的模拟网络用例运行。此前两次运行分别被沙箱禁止监听本机端口、测试运行器的全局离线开关干扰模拟请求；调整运行器后全量通过，业务代码未为此放宽网络规则。
-日志：`/private/tmp/token-watcher-pr2-KyI6bp/focused.log`、`/private/tmp/token-watcher-pr2-KyI6bp/full.log`。恢复说明：`docs/CODEX-COMPRESSED-HISTORY.md`。交付为本地已验证修改，尚未合并远端 PR、发布 npm、重启正式服务或修改云端历史。
+日志：`/private/tmp/token-watcher-pr2-KyI6bp/focused.log`、`/private/tmp/token-watcher-pr2-KyI6bp/full.log`。恢复说明：`docs/CODEX-COMPRESSED-HISTORY.md`。本地验证阶段结束时尚未发行；后续合并与发布结果见上方 1.8.4 发布记录。
 
 ---
 
