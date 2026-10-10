@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DATA_DIR, SOURCES } from './config.js';
 import { ensurePrices, lookupPrice } from './litellm.js';
 import { ensureFxRate } from './fx.js';
+import { localDayStart, localRangeStart } from './timeRange.js';
 
 /**
  * ccmr 费用折算：单价表 ~/.tokenmeter/pricing.json（用户可编辑覆盖）。
@@ -121,7 +122,7 @@ export function aggregateCosts(db, since, { rate = 7.2, table = {} } = {}) {
   };
 }
 
-export async function computeCosts(db, days = 30) {
+export async function computeCosts(db, days = 30, { now = Date.now() } = {}) {
   const pricing = await loadPricing();
   const fx = await Promise.race([
     ensureFxRate(pricing),
@@ -130,15 +131,14 @@ export async function computeCosts(db, days = 30) {
   const rate = fx.rate;
   const table = pricing.models || {};
   await Promise.race([ensurePrices().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
-  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
   const agg = (since) => aggregateCosts(db, since, { rate, table });
 
   const all = agg(0);
-  const today = agg(dayStart.getTime());
-  const last7 = agg(Date.now() - 7 * 86_400_000);
+  const today = agg(localDayStart(now));
+  const last7 = agg(localRangeStart(7, now));
 
   // 按天 × 模型成本（供"按天花费"堆叠柱形图）
-  const rangeStart = days > 0 ? dayStart.getTime() - (days - 1) * 86_400_000 : 0;
+  const rangeStart = localRangeStart(days, now);
   const dayRows = db.prepare(`
     SELECT date(ts/1000, 'unixepoch', 'localtime') d, model, ${PEAK_SQL} AS peak,
            SUM(input_tokens) fi, SUM(cached_input) ci, SUM(cache_write) cw, SUM(output_tokens) oi

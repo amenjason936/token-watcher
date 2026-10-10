@@ -3,6 +3,7 @@ import { readLinesFrom } from './lines.js';
 import { normalizeModel } from '../models.js';
 import { quotaFromRateLimits } from '../codexQuota.js';
 import { nextUsage, usageSnapshot } from '../codexUsage.js';
+import { decompressZstd } from '../zstd.js';
 
 /**
  * Codex rollout 采集器（~/.codex/sessions 与 archived_sessions，2.4GB 量级）。
@@ -45,6 +46,7 @@ function inReplay(st, ts) {
 }
 
 export async function collectCodexFile(store, { path, fileId, offset, state, version }) {
+  const compressed = /\.jsonl\.(?:zst|zstd)$/i.test(path);
   let st = state ?? { model: null, heads: [], project: null, seq: 0, parent: null };
   st._v = version; // 版本戳：避免常驻服务每轮全量重扫
   let inserted = 0;
@@ -67,7 +69,7 @@ export async function collectCodexFile(store, { path, fileId, offset, state, ver
     dedup_key: dedupKey,
   });
 
-  const { newOffset } = await readLinesFrom(path, offset, (line) => {
+  const processLine = (line) => {
     // 刚记下的用量记录是不是压缩调用，只看紧跟的这一行
     if (st.record && !st.record.compacted) {
       if (line.includes('"type":"compacted"')) { st.record.compacted = true; return; }
@@ -147,7 +149,21 @@ export async function collectCodexFile(store, { path, fileId, offset, state, ver
       // 文件内单调序号，重放幂等
       inserted += insert(ts, d, payload.session_id, `codex:${path}:${st.seq}`);
     }
-  });
+  };
+
+  let newOffset;
+  if (compressed) {
+    // Compressed files are snapshots: their byte size is not a decompressed JSONL offset.
+    const text = (await decompressZstd(path)).toString('utf8');
+    let start = 0, end;
+    while ((end = text.indexOf('\n', start)) !== -1) {
+      processLine(text.slice(start, end));
+      start = end + 1;
+    }
+    newOffset = 0;
+  } else {
+    ({ newOffset } = await readLinesFrom(path, offset, processLine));
+  }
 
   return { newOffset, inserted, state: st };
 }

@@ -14,6 +14,7 @@ import { CursorUsagePoller } from './cursorUsage.js';
 import { ensurePrices, setOnChange as onPricesLoaded } from './litellm.js';
 import { ensureFxRate, setOnChange as onFxLoaded } from './fx.js';
 import { scheduleLeaderboardUpload, getLeaderboardState, fetchLeaderboard } from './leaderboard.js';
+import { localDayStart, localRangeStart } from './timeRange.js';
 
 const DB_DIRPATH = dirname(DB_PATH);
 
@@ -33,12 +34,6 @@ function json(res, code, obj) {
     'cache-control': 'no-store',
   });
   res.end(body);
-}
-
-function startOfDay(d = new Date()) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x.getTime();
 }
 
 /** 0 表示全部；空值/非法值回落到 30 天，合法范围限制为整数天。 */
@@ -137,11 +132,10 @@ export function computeHealth(db, scannerStats) {
   });
 }
 
-export async function buildSummary(store, scannerStats, days, { balanceStatus = [] } = {}) {
+export async function buildSummary(store, scannerStats, days, { balanceStatus = [], now = Date.now() } = {}) {
   const db = store.db;
-  const now = Date.now();
-  const todayStart = startOfDay();
-  const yStart = todayStart - 86_400_000;
+  const todayStart = localDayStart(now);
+  const yStart = localDayStart(now, -1);
   const localKey = (ms) => {
     const d = new Date(ms);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -150,11 +144,11 @@ export async function buildSummary(store, scannerStats, days, { balanceStatus = 
   const yesterdayK = localKey(yStart);
 
   // 按自然日对齐：近 N 天 = 今天 0 点往前 N-1 天，避免 21 点查 7 天返回 8 个日桶
-  const rangeStart = days > 0 ? todayStart - (days - 1) * 86_400_000 : 0;
+  const rangeStart = localRangeStart(days, now);
 
   const allTime = db.prepare('SELECT COUNT(*) n, SUM(total_tokens) total FROM events').get();
   const today = db.prepare('SELECT SUM(total_tokens) total FROM events WHERE ts >= ?').get(todayStart);
-  const last7 = db.prepare('SELECT SUM(total_tokens) total FROM events WHERE ts >= ?').get(now - 7 * 86_400_000);
+  const last7 = db.prepare('SELECT SUM(total_tokens) total FROM events WHERE ts >= ?').get(localRangeStart(7, now));
   const peak = db.prepare(`
     SELECT MAX(total) peak FROM (
       SELECT SUM(total_tokens) total FROM events
@@ -191,7 +185,7 @@ export async function buildSummary(store, scannerStats, days, { balanceStatus = 
   }
 
   // 先算费用：对账要复用同一份汇率，两张卡才不会各说各话
-  const costs = await computeCosts(db, days);
+  const costs = await computeCosts(db, days, { now });
 
   return {
     generated_at: now,
@@ -407,7 +401,7 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
     }
     if (p === '/api/tool-activity') {
       const days = Math.max(1, Math.min(3650, Number(url.searchParams.get('days')) || 30));
-      const since = Date.now() - days * 86_400_000;
+      const since = localRangeStart(days);
       const rows = db_safe(store).prepare(`
         SELECT name, tool, COUNT(*) n FROM tool_calls WHERE ts >= ?
         GROUP BY name, tool ORDER BY n DESC LIMIT 60`).all(since);
@@ -422,7 +416,7 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
     }
     if (p === '/api/export.csv') {
       const days = parseRangeDays(url.searchParams.get('days'));
-      const since = days > 0 ? startOfDay() - (days - 1) * 86_400_000 : 0;
+      const since = localRangeStart(days);
       const rows = db_safe(store).prepare(`
         SELECT date(ts/1000, 'unixepoch', 'localtime') d, tool,
                SUM(input_tokens) input, SUM(cached_input) cached, SUM(cache_write) cache_write,

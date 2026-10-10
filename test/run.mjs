@@ -1859,8 +1859,10 @@ console.log('\n[LB] 社区排行榜');
   ins(NOW - 120_000, 'glm-5.3', 'zcode', 2_500);
   ins(NOW - 3 * 86400_000, 'claude-sonnet-4.6', 'claude-code', 10_000);
   ins(NOW - 8 * 86400_000, 'kimi-k3', 'kimi', 99_999); // 进入 30 日，不进本周
-  ins(NOW - 30 * 86400_000, 'boundary-model', 'codex', 7);
-  ins(NOW - 30 * 86400_000 - 1, 'too-old-model', 'codex', 123456);
+  const monthStart = new Date(NOW); monthStart.setUTCHours(0, 0, 0, 0);
+  monthStart.setUTCDate(monthStart.getUTCDate() - 29);
+  ins(monthStart.getTime(), 'boundary-model', 'codex', 7);
+  ins(monthStart.getTime() - 1, 'too-old-model', 'codex', 123456);
   ins(NOW + 86400_000, 'future-model', 'codex', 999_999); // 时钟异常不能提前入榜
 
   let sent = null;
@@ -1926,6 +1928,8 @@ await (await import('./leaderboard-antiforgery.mjs')).testLeaderboardAntiForgery
 await (await import('./leaderboard-ui.mjs')).testLeaderboardUi(ok);
 await (await import('./release-blockers.mjs')).testReleaseBlockers(ok);
 await (await import('./codex-replay.mjs')).testCodexReplay(ok);
+await (await import('./codex-zstd.mjs')).testCodexZstd(ok);
+await (await import('./date-ranges.mjs')).testDateRanges(ok);
 await (await import('./dsh-dedup.mjs')).testDshDedup(ok);
 await (await import('./stall-guard.mjs')).testStallGuard(ok);
 

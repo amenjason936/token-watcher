@@ -131,8 +131,9 @@ export async function buildLeaderboardReport(store, { now = Date.now(), roiFn = 
   const d = new Date(now);
   d.setUTCHours(0, 0, 0, 0); // 所有参与者采用同一个自然日
   const dayStart = d.getTime();
-  const weekStart = now - 7 * 86_400_000;
-  const monthStart = now - 30 * 86_400_000;
+  // 与 Worker 的 daily 累计窗口一致：含今天的 7/30 个 UTC 自然日。
+  const weekStart = dayStart - 6 * 86_400_000;
+  const monthStart = dayStart - 29 * 86_400_000;
 
   const day = db.prepare('SELECT SUM(total_tokens) t, COUNT(*) n FROM events WHERE ts >= ? AND ts <= ?').get(dayStart, now);
   const week = db.prepare('SELECT SUM(total_tokens) t FROM events WHERE ts >= ? AND ts <= ?').get(weekStart, now);

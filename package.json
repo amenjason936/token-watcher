@@ -1,6 +1,6 @@
 {
   "name": "token-watcher",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "Local real-time token usage & quota dashboard for AI coding agents (Claude Code, ccmr, Codex, ZCode, dsh, WorkBuddy, Grok Build, Pi, OpenCode, Antigravity, Kimi Code, Qoder, Cursor)",
   "keywords": [
     "token",
@@ -57,6 +57,7 @@
     "web/",
     "README.md",
     "LICENSE",
-    "docs/ARCHITECTURE.md"
+    "docs/ARCHITECTURE.md",
+    "docs/CODEX-COMPRESSED-HISTORY.md"
   ]
 }

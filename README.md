@@ -26,6 +26,8 @@ aggregate statistics after you explicitly opt in.
 
 ## Why Token Watcher
 
+> **Missing Codex history?** The source now reads `.jsonl`, `.jsonl.zst`, and `.jsonl.zstd`; collector v5 rescans available compressed history. Missing dates can affect both 7-day and 30-day totals. Local recovery does not backfill past community leaderboard reports. See the [decoder requirements, date windows, and recovery guide](./docs/CODEX-COMPRESSED-HISTORY.md) (Chinese).
+
 Most token trackers recompute a report when you ask. Token Watcher watches
 the logs as they're written: FSEvents → incremental parse → SSE push, the
 dashboard updates in **under a second** while your agents work. Everything is
@@ -175,12 +177,12 @@ self-host one and point the CLI at it. Server-side defenses: name sanitizing,
 and daily cleanup of entries inactive for over 30 days (normally removed within 31 days).
 Against forged numbers: implausible or self-contradicting reports are rejected rather than
 clamped, the 7-day and 30-day boards are summed server-side from the days the server
-actually received (client-reported rolling totals are never ranked), and banned IDs are refused.
+actually received (client-reported period totals are never ranked), and banned IDs are refused.
 See [cloud/README.md](cloud/README.md#防伪造).
 The daily board uses UTC; the 7-day and 30-day boards cover the last 7 / 30 UTC days and require a report within 24 hours.
 
-The dominant model follows the selected period: UTC today, rolling 7 days, or
-rolling 30 days. It is the model with the largest `total_tokens` sum in that window;
+The dominant model follows the selected period: UTC today, or the last 7 or 30
+UTC calendar days including today. It is the model with the largest `total_tokens` sum in that window;
 its percentage is rounded against **all** tokens in the same window. Only the
 winner is displayed; ties use model ID order. Events without a model remain in the
 denominator but cannot be a dominant model. Model versions remain distinct.
