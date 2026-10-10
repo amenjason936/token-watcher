@@ -1,15 +1,6 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import zlib from 'node:zlib';
 import { normalizeModel } from '../models.js';
-
-const execFileP = promisify(execFile);
-
-// 回落用的候选路径：不能只靠 PATH。常驻服务由 launchd 拉起，其 PATH 是系统默认，
-// 不含 /opt/homebrew/bin，而 zstd 通常只装在那里。
-const ZSTD_BINS = ['zstd', '/opt/homebrew/bin/zstd', '/usr/local/bin/zstd', '/usr/bin/zstd'];
+import { decompressZstd } from '../zstd.js';
 
 /**
  * dsh（DeepSeek Harness）采集器：~/.dsh/sessions 下 zstd 压缩的会话快照。
@@ -27,49 +18,9 @@ const ZSTD_BINS = ['zstd', '/opt/homebrew/bin/zstd', '/usr/local/bin/zstd', '/us
  * - 同一请求的 chunk、message 与新旧文件副本共用去重键：session + turn + step + 输入侧用量。
  * - 解压优先用外部 zstd（支持追加的多帧），仅单帧时可回落到 Node 内置实现。
  */
-/** zstd 帧魔数。dsh 按批追加独立帧，单个会话文件实测有数千帧 */
-const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-
-/**
- * 解压 zstd。**必须完整支持多帧**：dsh 是追加式写入，每批记录压成一个独立帧接在
- * 文件末尾，实测单个会话文件有 5800+ 帧，CLI 解出 19MB 而只解首帧只有 226 字节。
- *
- * Node 内置的 zstdDecompressSync 与 createZstdDecompress 都只解第一帧就结束，
- * 且不报错——用它做主路径会让整源静默归零（1.4.1/1.4.2 就是这么坏的）。
- * 因此以外部 zstd 为准，并显式试几个常见绝对路径：launchd 的 PATH 是系统默认，
- * 不含 homebrew，这是当初改用内置实现的起因。
- *
- * 只有确认文件仅含单帧时才回落到内置实现。宁可大声失败，也不要悄悄少算。
- */
-async function decompress(path) {
-  for (const bin of ZSTD_BINS) {
-    try {
-      const { stdout } = await execFileP(bin, ['-dc', path], { maxBuffer: 1024 * 1024 * 1024 });
-      return stdout;
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err; // 真正的解压失败要抛出去，不能当成"没装"
-    }
-  }
-  if (typeof zlib.zstdDecompressSync === 'function') {
-    const buf = await readFile(path);
-    // 魔数可能只是压缩负载里的巧合（Windows CI 上真实发生过：夹具解出的压缩字节里
-    // 碰巧含帧魔数，被当成多帧后整源拒绝）。只有"以该位置为界、前缀本身能完整解压"
-    // 才是真帧边界——真多帧文件的第一帧必然完整，截断的帧必然解压失败。
-    let multi = false;
-    let idx = buf.indexOf(ZSTD_MAGIC, 1);
-    while (idx !== -1) {
-      try { zlib.zstdDecompressSync(buf.subarray(0, idx)); multi = true; break; } catch { /* 巧合魔数，继续找 */ }
-      idx = buf.indexOf(ZSTD_MAGIC, idx + 1);
-    }
-    if (!multi) return zlib.zstdDecompressSync(buf).toString('utf8');
-    throw new Error(`${path} 含多个 zstd 帧，Node 内置实现只能解第一帧。请安装 zstd：brew install zstd`);
-  }
-  throw new Error('zstd 不可用：PATH 与常见安装路径下均无 zstd，请执行 brew install zstd');
-}
-
 export async function collectDshFile(store, { path, fileId }) {
   let inserted = 0;
-  const text = await decompress(path);
+  const text = (await decompressZstd(path)).toString('utf8');
   // seq 标识日志行，不是请求：同一次请求会有 chunk、message 两行，v3 副本还会
   // 重排 seq。turn + step 在同一会话内才是请求身份，不能靠时间戳或用量猜测重复。
   const file = basename(path);
