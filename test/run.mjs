@@ -1902,6 +1902,7 @@ await (await import('./leaderboard-antiforgery.mjs')).testLeaderboardAntiForgery
 await (await import('./leaderboard-ui.mjs')).testLeaderboardUi(ok);
 await (await import('./release-blockers.mjs')).testReleaseBlockers(ok);
 await (await import('./codex-replay.mjs')).testCodexReplay(ok);
+await (await import('./codex-zstd.mjs')).testCodexZstd(ok);
 await (await import('./dsh-dedup.mjs')).testDshDedup(ok);
 await (await import('./stall-guard.mjs')).testStallGuard(ok);
 

@@ -1,9 +1,9 @@
 /** 兼容已规范化的 Codex 键，避免回退后把同一事件重新入账。 */
 export function canonicalCodexKey(key) {
   if (key.startsWith('codex:file:') || key.startsWith('codex:tc:file:')) return key;
-  const m = key.match(/^codex:(tc:)?(.+\.jsonl):(.+)$/);
+  const m = key.match(/^codex:(tc:)?(.+\.jsonl(?:\.(?:zst|zstd))?):(.+)$/i);
   if (!m) return key;
-  const stem = m[2].replaceAll('\\', '/').split('/').pop().slice(0, -6);
+  const stem = m[2].replaceAll('\\', '/').split('/').pop().replace(/\.jsonl(?:\.(?:zst|zstd))?$/i, '');
   return `codex:${m[1] || ''}file:${stem}:${m[3]}`;
 }
 

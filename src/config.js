@@ -63,8 +63,9 @@ export const SOURCES = [
     kind: 'jsonl',
     collector: 'codex',
     // v4: 子代理/分叉文件开头重放的父会话历史不再计入；单次用量改取 last_token_usage。
-    // 存量行按旧规则多算过，需全量重扫重建
-    version: 4,
+    // v5: 识别 .jsonl.zst/.jsonl.zstd 快照；路径后缀归一后与普通及归档副本共用去重键。
+    version: 5,
+    match: (name) => name.endsWith('.jsonl') || name.endsWith('.jsonl.zst') || name.endsWith('.jsonl.zstd'),
     subscription: true,
   },
   {

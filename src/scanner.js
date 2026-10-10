@@ -56,7 +56,8 @@ async function* enumerate(source) {
       }
     }
     return;
-  }  for (const root of source.roots) {
+  }
+  for (const root of source.roots) {
     // jsonl 源可声明 match 收窄文件名（antigravity 的 brain 下只认 transcript*.jsonl，
     // 其余 jsonl（如会话元数据）不产生文件行）
     const match = source.match || ((n) => n.endsWith('.jsonl'));
@@ -114,7 +115,9 @@ export class Scanner extends EventEmitter {
         st.files++;
         this.progress++;
         seen.add(path);
-        const fileId = sessionKey || basename(path, '.jsonl');
+        const fileId = sessionKey || (src.collector === 'codex'
+          ? basename(path).replace(/\.jsonl(?:\.(?:zst|zstd))?$/i, '')
+          : basename(path, '.jsonl'));
         const row = this.store.getFile(path);
         const prev = row?.state_json ? JSON.parse(row.state_json) : undefined;
         // 采集器版本落后 → 全量重扫补数据（dedup 幂等，仅一次性成本）
@@ -122,10 +125,11 @@ export class Scanner extends EventEmitter {
         // mtime 跳过仅用于文件型源（sqlite 的 WAL 写入不改变主文件 mtime），且须版本一致
         const unchanged = row && row.size === s.size && row.mtime_ms === s.mtimeMs;
         if (src.kind !== 'sqlite' && unchanged && !needFull) continue;
-        const state = needFull ? undefined : prev;
+        const compressedSnapshot = src.collector === 'codex' && /\.jsonl\.(?:zst|zstd)$/i.test(path);
+        const state = needFull || compressedSnapshot ? undefined : prev;
         const cursor = row?.offset ?? 0;
         const offset = src.kind === 'jsonl'
-          ? (needFull || s.size < cursor ? 0 : cursor)
+          ? (needFull || compressedSnapshot || s.size < cursor ? 0 : cursor)
           : 0;
 
         this.store.db.exec('BEGIN');

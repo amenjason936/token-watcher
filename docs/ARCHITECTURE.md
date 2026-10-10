@@ -50,6 +50,8 @@ block3 tool_use   3594/47360/309   ← 唯一带真实输出的一行
 因此 `store.insertEvent` 的去重语义是**"输出更大的后来者补齐该行"**而非纯 `INSERT OR IGNORE`：无冲突时行为不变，且能扛住分片跨增量扫描轮次落到不同批次的情况。不采用"跳过 `stop_reason == null`"，是因为那会新增一条静默丢弃路径——某个源一旦不写该字段就整源归零，正是下面 dsh 踩过的坑。
 
 ### Codex（坑最多）
+Codex 同时读取 `.jsonl`、`.jsonl.zst` 与 `.jsonl.zstd`。压缩日志按完整快照解压重扫，不能以压缩字节数作为 JSONL 游标；三种扩展及 `sessions`/`archived_sessions` 中同 stem 副本共用 session 与事件/工具调用去重键。多帧优先由系统 `zstd` 完整解压，单帧可回落 Node 内置解压；Node 22.13 等无内置 zstd 的运行时需可用的 `zstd` CLI。
+
 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`：
 - 单次用量取 `token_count.info.last_token_usage`；`total_token_usage` 是**累计值**，只用来认"这条见没见过"
   （Codex 保证 total = 上一条 total + last）。规则在 `src/codexUsage.js`：
