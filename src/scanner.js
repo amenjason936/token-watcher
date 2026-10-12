@@ -196,7 +196,7 @@ export class Scanner extends EventEmitter {
     if (!liveRoots.length) return 0;
     const db = this.store.db;
     const rows = db.prepare('SELECT path FROM files WHERE tool = ?').all(tool);
-    const gone = rows.filter(r => !seen.has(r.path) && liveRoots.some(root => r.path.startsWith(root)));
+    const gone = rows.filter(r => !seen.has(r.path) && liveRoots.some(root => isUnderRoot(r.path, root)));
     if (!gone.length) return 0;
     const del = db.prepare('DELETE FROM files WHERE path = ?');
     db.exec('BEGIN');
