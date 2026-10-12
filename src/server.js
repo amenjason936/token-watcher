@@ -114,8 +114,10 @@ export function computeHealth(db, scannerStats) {
       'SELECT COUNT(*) n, MAX(mtime_ms) max_mtime FROM files WHERE tool = ?').get(tool);
     const st = scannerStats[tool] || {};
     let status = 'ok';
-    if (!dataRows) status = 'empty';
-    else if ((st.parse_errors || 0) > 0) status = 'error';
+    // 错误优先于"无数据"：上游改格式后首轮就解析失败的源正是"有文件、零事件"，
+    // 报 empty 会让 doctor 放行这个最该报警的场景
+    if ((st.parse_errors || 0) > 0) status = 'error';
+    else if (!dataRows) status = 'empty';
     else if (f.max_mtime && lastTs &&
              f.max_mtime > now - 30 * 60_000 &&
              f.max_mtime - lastTs > 30 * 60_000) status = 'stale';
@@ -228,8 +230,8 @@ export async function buildSummary(store, scannerStats, days, { balanceStatus = 
   };
 }
 
-async function serveFile(res, path, type) {
-  const s = await stat(path).catch(() => null);
+export async function serveFile(res, path, type, { statImpl = stat } = {}) {
+  const s = await statImpl(path).catch(() => null);
   if (!s || !s.isFile()) {
     res.writeHead(404); res.end('not found'); return;
   }
@@ -238,7 +240,9 @@ async function serveFile(res, path, type) {
     'content-length': s.size,
     'cache-control': 'no-cache',
   });
-  createReadStream(path).pipe(res);
+  // stat 与 open 之间文件可能被换掉（npm update -g 覆盖安装树）：pipe 不转发源端错误，
+  // 不接住的话响应永远不结束，浏览器请求一直挂着
+  createReadStream(path).on('error', () => res.destroy()).pipe(res);
 }
 
 function db_safe(store) { return store.db; }
@@ -311,50 +315,54 @@ function scheduleBackup(store, log = () => {}) {
 export function startServer({ store, scanner, balancePoller, claudePoller, cursorPoller, zcodePoller, port, log = () => {} }) {
   const clients = new Set();
   const notify = () => { for (const res of clients) res.write(`data: {"type":"update"}\n\n`); };
-  scanner.on('update', notify);
-  // 新事件可能带来新的 credit 轮次 → 重跑费率自学习再通知前端
-  scanner.on('update', () => {
-    try { learnWorkbuddyRates(store); } catch (e) { log(`rates: ${e.message}`); }
-  });
-  if (balancePoller) {
-    balancePoller.onChange = notify;
-    balancePoller.start();
-  }
-  if (claudePoller) {
-    claudePoller.onChange = notify;
-    claudePoller.start();
-  } else {
-    // 兜底：直接调用方（测试/自定义 server）没传 poller 时不至于完全没有官方配额
-    claudePoller = new ClaudeUsagePoller(store, { log });
-    claudePoller.onChange = notify;
-    claudePoller.start();
-  }
-  if (cursorPoller) {
-    cursorPoller.onChange = notify;
-    cursorPoller.start();
-  } else {
-    cursorPoller = new CursorUsagePoller(store, { log });
-    cursorPoller.onChange = notify;
-    cursorPoller.start();
-  }
-  if (zcodePoller) {
-    zcodePoller.onChange = notify;
-    zcodePoller.start();
-  } else {
-    zcodePoller = new ZcodeQuotaPoller(store, { log });
-    zcodePoller.onChange = notify;
-    zcodePoller.start();
-  }
-  scheduleBackup(store, log);
-  scheduleLeaderboardUpload(store, { log }); // 榜单上报（默认关闭时每次 tick 直接跳过）
-  onPricesLoaded(notify);                          // 价格加载/刷新后推送前端
-  onFxLoaded(notify);                              // 汇率加载/刷新后推送前端
-  ensurePrices().catch(() => {});
-  ensureFxRate({}).catch(() => {});
-  // 离线模式没有可刷新的远端来源，不排这个定时任务
-  if (isOffline()) log('离线模式：跳过汇率 / LiteLLM 牌价 / 余额的全部外网请求');
-  else setInterval(() => ensurePrices({ force: true }).catch(() => {}), 24 * 3600_000).unref?.();
-  try { learnWorkbuddyRates(store); } catch { /* 首次静默 */ }
+  // 后台任务（轮询器、监听、定时器）只在 listen 成功后启动：端口被占时调用方会换端口重试，
+  // 提前启动的话每次失败都多留一份——重复打官方接口、榜单同一小时重复上报撞 429
+  const startLifecycle = () => {
+    scanner.on('update', notify);
+    // 新事件可能带来新的 credit 轮次 → 重跑费率自学习再通知前端
+    scanner.on('update', () => {
+      try { learnWorkbuddyRates(store); } catch (e) { log(`rates: ${e.message}`); }
+    });
+    if (balancePoller) {
+      balancePoller.onChange = notify;
+      balancePoller.start();
+    }
+    if (claudePoller) {
+      claudePoller.onChange = notify;
+      claudePoller.start();
+    } else {
+      // 兜底：直接调用方（测试/自定义 server）没传 poller 时不至于完全没有官方配额
+      claudePoller = new ClaudeUsagePoller(store, { log });
+      claudePoller.onChange = notify;
+      claudePoller.start();
+    }
+    if (cursorPoller) {
+      cursorPoller.onChange = notify;
+      cursorPoller.start();
+    } else {
+      cursorPoller = new CursorUsagePoller(store, { log });
+      cursorPoller.onChange = notify;
+      cursorPoller.start();
+    }
+    if (zcodePoller) {
+      zcodePoller.onChange = notify;
+      zcodePoller.start();
+    } else {
+      zcodePoller = new ZcodeQuotaPoller(store, { log });
+      zcodePoller.onChange = notify;
+      zcodePoller.start();
+    }
+    scheduleBackup(store, log);
+    scheduleLeaderboardUpload(store, { log }); // 榜单上报（默认关闭时每次 tick 直接跳过）
+    onPricesLoaded(notify);                          // 价格加载/刷新后推送前端
+    onFxLoaded(notify);                              // 汇率加载/刷新后推送前端
+    ensurePrices().catch(() => {});
+    ensureFxRate({}).catch(() => {});
+    // 离线模式没有可刷新的远端来源，不排这个定时任务
+    if (isOffline()) log('离线模式：跳过汇率 / LiteLLM 牌价 / 余额的全部外网请求');
+    else setInterval(() => ensurePrices({ force: true }).catch(() => {}), 24 * 3600_000).unref?.();
+    try { learnWorkbuddyRates(store); } catch { /* 首次静默 */ }
+  };
 
   const server = createServer(withErrors(async (req, res) => {
     // DNS rebinding 防护：只绑 127.0.0.1 挡不住恶意页面把自家域名解析到本机再来读面板。
@@ -478,6 +486,7 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
     server.once('error', onEarlyError);
     server.listen(port, '127.0.0.1', () => {
       server.removeListener('error', onEarlyError);
+      startLifecycle();
       // listen 成功后的运行期错误不能再 reject（promise 已完成），也别变成 unhandled
       server.on('error', (err) => log(`server error: ${err?.message ?? err}`));
       log(`listening on http://127.0.0.1:${port}`);
