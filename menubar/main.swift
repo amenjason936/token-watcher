@@ -19,7 +19,24 @@ struct Summary: Decodable {
   struct Quota: Decodable {
     var codex: CodexQ?
     struct CodexQ: Decodable { var ts: Int?; var data: DataQ?
-      struct DataQ: Decodable { var used_percent: Double?; var plan_type: String? } }
+      // 后端（src/codexQuota.js）输出窗口列表；平铺的 used_percent 是 1.8 之前的旧形态，留作兜底
+      struct DataQ: Decodable { var windows: [Window]?; var used_percent: Double?; var plan_type: String? }
+      struct Window: Decodable { var window_minutes: Double?; var used_percent: Double? }
+      /// 胶囊与告警看最紧的那个窗口（已用比例最高者）
+      var usedPercent: Double? {
+        let pcts = (data?.windows ?? []).compactMap { $0.used_percent }
+        return pcts.max() ?? data?.used_percent
+      }
+      /// 菜单逐窗口列出：5h / 周 / 其他按分钟数
+      var windowLines: [(label: String, pct: Double)] {
+        (data?.windows ?? []).compactMap { w in
+          guard let pct = w.used_percent else { return nil }
+          let m = Int(w.window_minutes ?? 0)
+          let label = m == 300 ? "5h" : m == 10080 ? "周" : m > 0 ? "\(m)分钟" : "窗口"
+          return (label, pct)
+        }
+      }
+    }
     var claude5h: ClaudeQ?
     struct ClaudeQ: Decodable { var active: Bool?; var window_tokens: Int?
       var window_ends_at: Double? }
@@ -62,7 +79,7 @@ final class BarApp: NSObject, NSApplicationDelegate, UNUserNotificationCenterDel
   func checkThresholds() {
     guard let s = summary else { return }
     var conditions: [(key: String, level: Int, title: String, body: String)] = []
-    if let pct = s.quota?.codex?.data?.used_percent {
+    if let pct = s.quota?.codex?.usedPercent {
       if pct >= 95 { conditions.append(("codex", 2, "Codex 配额即将耗尽", String(format: "已用 %.0f%%，即将触发限速", pct))) }
       else if pct >= 80 { conditions.append(("codex", 1, "Codex 配额偏高", String(format: "已用 %.0f%%", pct))) }
     }
@@ -99,7 +116,7 @@ final class BarApp: NSObject, NSApplicationDelegate, UNUserNotificationCenterDel
   func refresh() {
     summary = fetchSummary()
     if let s = summary, let today = s.totals?.today_tokens {
-      let codexPct = s.quota?.codex?.data?.used_percent.map { String(format: "·C%.0f%%", $0) } ?? ""
+      let codexPct = s.quota?.codex?.usedPercent.map { String(format: "·C%.0f%%", $0) } ?? ""
       statusItem.button?.title = "T\(fmtTokens(today))\(codexPct)"
     } else {
       statusItem.button?.title = "T--"
@@ -117,8 +134,14 @@ final class BarApp: NSObject, NSApplicationDelegate, UNUserNotificationCenterDel
       add("累计 \(fmtTokens(all)) tokens")
     }
     menu.addItem(.separator())
-    if let pct = s?.quota?.codex?.data?.used_percent, let plan = s?.quota?.codex?.data?.plan_type {
-      add(String(format: "Codex（%@）：已用 %.1f%%", plan, pct))
+    if let codex = s?.quota?.codex {
+      let plan = codex.data?.plan_type ?? "-"
+      let lines = codex.windowLines
+      if !lines.isEmpty {
+        for l in lines { add(String(format: "Codex（%@）%@：已用 %.1f%%", plan, l.label, l.pct)) }
+      } else if let pct = codex.data?.used_percent {
+        add(String(format: "Codex（%@）：已用 %.1f%%", plan, pct))
+      }
     }
     if let c5 = s?.quota?.claude5h, c5.active == true, let w = c5.window_tokens {
       add("Claude 5h 窗口（推算）：\(fmtTokens(w)) tokens")

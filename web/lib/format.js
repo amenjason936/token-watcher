@@ -82,3 +82,18 @@ export function fmtCountdown(ms) {
   if (h > 0) return `${h}:${m}:${sec}`;
   return `${m}:${sec}`;
 }
+
+/**
+ * 订阅 ROI 徽标（HTML）。比值未知分两种：月费未填、模型查不到牌价——后者不能显示成 ×0，
+ * 那会被读成"订阅一文不值"。部分缺价时比值只是下限，如实标注。
+ */
+export function roiBadge(e) {
+  if (e.paid_cny == null) return '<span class="dim">月费未填</span>';
+  if (e.price_missing === 'all') return '<span class="dim" title="本月用到的模型查不到牌价，无法折算 API 等值">缺价</span>';
+  if (e.ratio == null) return '<span class="dim">—</span>';
+  const gap = e.price_missing === 'partial'
+    ? ' <span class="dim" title="部分模型查不到牌价，未计入 API 等值，比值偏低">部分缺价</span>' : '';
+  return (e.ratio >= 1
+    ? `<b style="color:var(--good)">×${e.ratio.toFixed(1)} 划算</b>`
+    : `<b style="color:var(--warn)">×${e.ratio.toFixed(1)}</b>`) + gap;
+}
