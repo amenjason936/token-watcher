@@ -8,12 +8,14 @@
  * 单独运行：node test/session-drilldown.mjs
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import vm from 'node:vm';
 
 const SELF = fileURLToPath(import.meta.url);
+const ROOT = join(dirname(SELF), '..');
 
 /** 各采集器实际产生的会话 ID 形态（见 src/collectors/*，含文件名 stem 回落） */
 export const REAL_IDS = [
@@ -93,7 +95,66 @@ async function cases(ok) {
   }
 }
 
+/**
+ * 面板侧：把 web/app.js 里真实的 loadSessions / showSessionDetail 源码放进 vm 执行，DOM 与 fetch
+ * 用最小桩替代。行元素的 dataset 从渲染出的 HTML 属性解析（含实体反转义），点击后记录详情请求 URL。
+ */
+async function dashboardCases(ok) {
+  const src = readFileSync(join(ROOT, 'web/app.js'), 'utf8');
+  const start = src.indexOf('async function loadSessions(');
+  const end = src.indexOf('\ndocument.getElementById(\'sess-date\')', start);
+  ok('app.js 中找到会话钻取函数', start >= 0 && end > start);
+  if (start < 0 || end < 0) return;
+  const { esc } = await import(pathToFileURL(join(ROOT, 'web/lib/format.js')).href);
+  const unesc = (v) => v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const sessions = [
+    { session_id: 'shared-id', tool: 'codex', first_ts: 1, last_ts: 2, calls: 2, total: 201, peak: 101, models: '', project: null },
+    { session_id: 'shared-id', tool: 'claude-code', first_ts: 1, last_ts: 2, calls: 1, total: 7, peak: 7, models: '', project: null },
+    { session_id: 'proj.v2:"x"&y', tool: 'grok', first_ts: 1, last_ts: 2, calls: 1, total: 5, peak: 5, models: '', project: null },
+  ];
+  const requests = [];
+  const els = {};
+  const el = (id) => (els[id] ??= {
+    id, value: '', textContent: '', style: {}, _html: '', rows: [],
+    set innerHTML(h) {
+      this._html = h;
+      this.rows = [...h.matchAll(/<tr class="sess-row"([^>]*)>/g)].map(([, attrs]) => {
+        const dataset = {};
+        for (const [, k, v] of attrs.matchAll(/data-([a-z]+)="([^"]*)"/g)) dataset[k] = unesc(v);
+        const tr = { dataset, style: {}, handlers: {}, addEventListener(t, f) { this.handlers[t] = f; } };
+        return tr;
+      });
+    },
+    get innerHTML() { return this._html; },
+    querySelectorAll(sel) { return sel === '.sess-row' ? this.rows : []; },
+  });
+  const context = vm.createContext({
+    document: { getElementById: el },
+    fetch: async (u) => {
+      requests.push(u);
+      const body = u.startsWith('/api/sessions') ? { sessions } : { events: [{ ts: 1, total_tokens: 1 }] };
+      return { json: async () => body };
+    },
+    esc, encodeURIComponent, Date, JSON, Promise,
+    TOOL_LABEL: {}, prettyModel: (m) => m, fmt: String, fmtShort: String,
+    charts: { sess: { resize() {}, setOption() {} } },
+    cssVar: () => '', chartTooltip: (_k, o) => o, isLight: () => false,
+  });
+  vm.runInContext(`${src.slice(start, end)}\nglobalThis.__load = loadSessions;`, context);
+  await context.__load('2026-10-12');
+  const rows = el('sessions').rows;
+  ok('会话列表渲染出每一行', rows.length === sessions.length, String(rows.length));
+  for (const [i, s] of sessions.entries()) {
+    requests.length = 0;
+    rows[i]?.handlers.click?.();
+    await new Promise(r => setImmediate(r));
+    const want = `/api/session/${encodeURIComponent(s.session_id)}?tool=${encodeURIComponent(s.tool)}`;
+    ok(`点击 ${s.tool} 行只请求该 (tool, 会话)`, requests.length === 1 && requests[0] === want, `${JSON.stringify(requests)} ≠ ${want}`);
+  }
+}
+
 export async function testSessionDrilldown(ok) {
+  await dashboardCases(ok);
   console.log('\n[会话钻取] /api/session/:sid');
   const home = mkdtempSync(join(tmpdir(), 'tw-sess-home-'));
   const r = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', SELF, 'child'], {
