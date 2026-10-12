@@ -1948,6 +1948,7 @@ await (await import('./codex-zstd.mjs')).testCodexZstd(ok);
 await (await import('./date-ranges.mjs')).testDateRanges(ok);
 await (await import('./dsh-dedup.mjs')).testDshDedup(ok);
 await (await import('./stall-guard.mjs')).testStallGuard(ok);
+await (await import('./menubar-contract.mjs')).testMenubar(ok);
 await (await import('./roi-price-gaps.mjs')).testRoiPriceGaps(ok);
 await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
 
