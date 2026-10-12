@@ -2003,6 +2003,7 @@ await (await import('./review-fixes.mjs')).testReviewFixes(ok);
 await (await import('./menubar-contract.mjs')).testMenubar(ok);
 await (await import('./roi-price-gaps.mjs')).testRoiPriceGaps(ok);
 await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
+await (await import('./prune-roots.mjs')).testPruneRoots(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });
