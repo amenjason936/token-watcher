@@ -19,6 +19,23 @@ import net from 'node:net';
 import http from 'node:http';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// 测试进程自身也隔离：config.js 在导入时按 homedir() 定下数据目录，必须在导入前换成临时 HOME，
+// 否则进程内用例（牌价 / 汇率缓存、备份定时器）会读写调用方真实的 ~/.tokenmeter。
+// 默认离线、不发外网请求；只有需要走在线分支的用例用 withOnline() 局部打开（fetch 均为注入的假实现）。
+const PROC_HOME = mkdtempSync(join(tmpdir(), 'tokenmeter-proc-'));
+process.env.HOME = PROC_HOME;
+process.env.USERPROFILE = PROC_HOME;
+// 采集根不只看 HOME：OpenCode 走 XDG_DATA_HOME / LOCALAPPDATA，Cursor 凭证走 XDG_CONFIG_HOME / APPDATA。
+// 这几个基目录也一并指进临时目录（子进程经 ...process.env 继承），否则会扫到调用方真实的库
+for (const [k, sub] of [['XDG_DATA_HOME', '.local/share'], ['XDG_CONFIG_HOME', '.config'],
+  ['LOCALAPPDATA', 'AppData/Local'], ['APPDATA', 'AppData/Roaming']]) process.env[k] = join(PROC_HOME, sub);
+process.env.TOKENMETER_OFFLINE = '1';
+process.env.TOKENMETER_NO_KEYCHAIN = '1';
+const withOnline = async (fn) => {
+  delete process.env.TOKENMETER_OFFLINE;
+  try { return await fn(); } finally { process.env.TOKENMETER_OFFLINE = '1'; }
+};
+globalThis.__twWithOnline = withOnline; // 拆分出去的测试文件共用
 const require = (await import('node:module')).createRequire(import.meta.url);
 // 数据源注册表是多层断言的共同基准（前端登记、健康表长度），顶层导入一次
 const { SOURCES } = await import(pathToFileURL(join(ROOT, 'src/config.js')).href);
@@ -348,9 +365,7 @@ console.log('\n[2c] 后端健壮性');
   const poller = new BalancePoller({ saveQuota() {} }, {
     fetchImpl: always404, maxClientErrors: 2, envPath: join(etmp, '.env'), log: () => {},
   });
-  await poller.poll();
-  await poller.poll();
-  await poller.poll();
+  await withOnline(async () => { await poller.poll(); await poller.poll(); await poller.poll(); });
   ok('连续 4xx 后熔断，不再每轮重试', calls === 2, `实际请求 ${calls} 次`);
   ok('熔断状态可见（面板能标出来）', poller.status().some(s => s.id === 'deepseek'),
     JSON.stringify(poller.status()));
@@ -1383,7 +1398,8 @@ console.log('\n[10] 菜单栏胶囊的分发');
   if (existsSync(exe)) {
     // 光声明不够：曾经 files 里写了却因为路径写法不对而没进包
     const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'],
-      { cwd: ROOT, encoding: 'utf8' });
+      // 测试进程 HOME 是空临时目录：npm 会把每次都当成"从未检查过更新"去请求 registry
+      { cwd: ROOT, encoding: 'utf8', env: { ...process.env, npm_config_update_notifier: 'false', npm_config_offline: 'true' } });
     let files = [];
     try { files = JSON.parse(packed.stdout)[0].files.map((f) => f.path); } catch { /* 断言会报错 */ }
     ok('声明的 app 确实进了发布产物',
@@ -1780,7 +1796,7 @@ console.log('\n[13] Claude 官方配额单元');
     await poller.poll();
     const n2b = cstore.db.prepare("SELECT COUNT(*) n FROM events WHERE tool='cursor'").get().n;
     ok('cursor poller 幂等（重复导出不重复入账）', n2b === 3, String(n2b));
-    process.env.TOKENMETER_OFFLINE = saved;
+    if (saved === undefined) delete process.env.TOKENMETER_OFFLINE; else process.env.TOKENMETER_OFFLINE = saved;
     cstore.close();
     rmSync(cHome, { recursive: true, force: true });
   }
@@ -1869,7 +1885,7 @@ console.log('\n[LB] 社区排行榜');
   const fakeFetch = async (url, opts) => { sent = { url, body: JSON.parse(opts.body) }; return { ok: true }; };
   const stubRoi = async () => ({ configured: true, entries: [
     { paid_cny: 100, api_cny: 250 }, { paid_cny: null, api_cny: 5 }] });
-  const r1 = await pushLeaderboardReport(store, { fetchImpl: fakeFetch, now: NOW, roiFn: stubRoi });
+  const r1 = await withOnline(() => pushLeaderboardReport(store, { fetchImpl: fakeFetch, now: NOW, roiFn: stubRoi }));
   ok('上报成功且地址正确', r1.ok === true && sent.url === `${LEADERBOARD_URL_DEFAULT}/report`, JSON.stringify(r1));
   ok('今日/本周聚合正确', sent.body.day_tokens === 4_000 && sent.body.week_tokens === 14_000
     && sent.body.day_requests === 2, JSON.stringify(sent.body));
@@ -1887,10 +1903,10 @@ console.log('\n[LB] 社区排行榜');
     && getLeaderboardState(store).last_error === null);
 
   // 失败路径：网络异常 / 非 2xx / 离线——都不抛出，错误记录进设置
-  const r2 = await pushLeaderboardReport(store, { fetchImpl: async () => { throw new Error('boom'); }, now: NOW + 1000, roiFn: stubRoi });
+  const r2 = await withOnline(() => pushLeaderboardReport(store, { fetchImpl: async () => { throw new Error('boom'); }, now: NOW + 1000, roiFn: stubRoi }));
   ok('网络异常不抛出且记录错误', r2.ok === false && r2.error === 'boom'
     && getLeaderboardState(store).last_error === 'boom');
-  const r3 = await pushLeaderboardReport(store, { fetchImpl: async () => ({ ok: false, status: 503 }), now: NOW + 2000, roiFn: stubRoi });
+  const r3 = await withOnline(() => pushLeaderboardReport(store, { fetchImpl: async () => ({ ok: false, status: 503 }), now: NOW + 2000, roiFn: stubRoi }));
   ok('非 2xx 视为失败', r3.ok === false && r3.error === 'HTTP 503');
   const savedOffline = process.env.TOKENMETER_OFFLINE;
   process.env.TOKENMETER_OFFLINE = '1';
@@ -1910,9 +1926,9 @@ console.log('\n[LB] 社区排行榜');
     try { setLeaderboardConfig(store, { url }); } catch { threw = true; }
     ok(`不安全榜单地址被拒 ${url}`, threw);
   }
-  const interrupted = await pushLeaderboardReport(store, { now: NOW, fetchImpl: () => {
+  const interrupted = await withOnline(() => pushLeaderboardReport(store, { now: NOW, fetchImpl: () => {
     throw new Error('must not send after opt-out');
-  }, roiFn: async () => { setLeaderboardConfig(store, { enabled: false }); return null; } });
+  }, roiFn: async () => { setLeaderboardConfig(store, { enabled: false }); return null; } }));
   ok('聚合途中退出后不发送', interrupted.skipped === 'config-changed');
   setLeaderboardConfig(store, { url: 'https://self.example.com/' });
   ok('自托管地址入库并去尾斜杠', getLeaderboardState(store).url === 'https://self.example.com');
@@ -1933,9 +1949,23 @@ await (await import('./date-ranges.mjs')).testDateRanges(ok);
 await (await import('./dsh-dedup.mjs')).testDshDedup(ok);
 await (await import('./stall-guard.mjs')).testStallGuard(ok);
 await (await import('./menubar-contract.mjs')).testMenubar(ok);
+await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });
+console.log('\n[隔离] 数据目录与采集根');
+{
+  // 隔离靠的是"导入前换基目录"：断言进程内解析出的每条路径都落在临时目录下（快照真实目录会被
+  // 正在运行的本机服务误判为改动，且看不见子目录与读操作）
+  const cfg = await import(pathToFileURL(join(ROOT, 'src/config.js')).href);
+  const paths = [cfg.DATA_DIR, cfg.DB_PATH, ...cfg.SOURCES.flatMap(x => x.roots)];
+  const outside = paths.filter(x => !x.startsWith(PROC_HOME));
+  ok('数据目录与全部采集根都在测试临时目录内', paths.length > 10 && !outside.length, outside.join(' '));
+  const childEnv = ['HOME', 'USERPROFILE', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'LOCALAPPDATA', 'APPDATA']
+    .filter(k => !String(process.env[k]).startsWith(PROC_HOME));
+  ok('子进程继承的基目录变量都指向临时目录', !childEnv.length, childEnv.join(' '));
+}
+rmSync(PROC_HOME, { recursive: true, force: true });
 console.log(failed ? `\n✗ ${failed} 项失败` : '\n✓ 全部通过');
 process.exit(failed ? 1 : 0);
 
