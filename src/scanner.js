@@ -1,6 +1,6 @@
 import { readdir, stat } from 'node:fs/promises';
 import { watch as watchCb, existsSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import path, { basename, dirname, join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SOURCES } from './config.js';
 import { collectClaudeFile } from './collectors/claude.js';
@@ -63,6 +63,15 @@ async function* enumerate(source) {
     const match = source.match || ((n) => n.endsWith('.jsonl'));
     for await (const p of walkByExt(root, match)) yield [p, null];
   }
+}
+
+/**
+ * path 是否归属 root：等于 root（sqlite 源的 root 就是库文件），或在 root 之下且以分隔符为界。
+ * 纯字符串前缀会让 `~/.foo` 认领 `~/.foo-bar` 的文件。pathMod 供测试注入 posix / win32。
+ */
+export function isUnderRoot(p, root, pathMod = path) {
+  const r = root.endsWith(pathMod.sep) ? root.slice(0, -pathMod.sep.length) : root;
+  return p === r || p.startsWith(r + pathMod.sep);
 }
 
 /** 当前确实存在的 roots；root 整体不可用（外置盘未挂载/目录重命名）时不清理其游标 */
@@ -187,7 +196,7 @@ export class Scanner extends EventEmitter {
     if (!liveRoots.length) return 0;
     const db = this.store.db;
     const rows = db.prepare('SELECT path FROM files WHERE tool = ?').all(tool);
-    const gone = rows.filter(r => !seen.has(r.path) && liveRoots.some(root => r.path.startsWith(root)));
+    const gone = rows.filter(r => !seen.has(r.path) && liveRoots.some(root => isUnderRoot(r.path, root)));
     if (!gone.length) return 0;
     const del = db.prepare('DELETE FROM files WHERE path = ?');
     db.exec('BEGIN');
