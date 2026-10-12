@@ -276,6 +276,18 @@ function isLocalHost(host) {
  * Node 默认直接退出进程——一次 SQLITE_BUSY 就能让常驻面板整个消失。
  * 错误详情只进本地日志（可能含本地路径），响应体只给一句通用说明。
  */
+/**
+ * /api/session/:sid 的 ID 段 → 会话 ID，坏输入返回 null（调用方回 400）。
+ * 会话 ID 原样来自上游：uuid、rollout-<时间>-<uuid>、anty-/session_ 前缀，也有文件名 stem 与
+ * dsh 目录名——可含 `.`、`:`、空格等任意文件名字符，所以不用字符白名单，只拒空、超长与控制字符。
+ * 查询走参数绑定，ID 不进 SQL 文本；残缺的百分号编码会让 decodeURIComponent 抛错，也按 400 处理。
+ */
+export function parseSessionId(segment) {
+  let sid;
+  try { sid = decodeURIComponent(segment); } catch { return null; }
+  return /^[^\u0000-\u001f\u007f]{1,256}$/u.test(sid) ? sid : null;
+}
+
 export function withErrors(handler, log = () => {}) {
   return async (req, res) => {
     try {
@@ -399,12 +411,15 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
       return json(res, 200, { day, sessions: rows });
     }
     if (p.startsWith('/api/session/')) {
-      const sid = decodeURIComponent(p.slice('/api/session/'.length));
-      if (!/^[A-Za-z0-9_-]{1,80}$/.test(sid)) return json(res, 400, { error: 'bad id' });
+      const sid = parseSessionId(p.slice('/api/session/'.length));
+      if (sid === null) return json(res, 400, { error: 'bad id' });
+      // 列表按 (tool, session_id) 分组，钻取也按这一对取；不带 tool 时保持旧行为（全部工具）
+      const tool = url.searchParams.get('tool') || '';
       const rows = db_safe(store).prepare(`
         SELECT ts, model, input_tokens, cached_input, cache_write, output_tokens, total_tokens
-        FROM events WHERE session_id = ? ORDER BY ts LIMIT 5000`).all(sid);
-      return json(res, 200, { session_id: sid, events: rows });
+        FROM events WHERE session_id = ? ${tool ? 'AND tool = ?' : ''} ORDER BY ts LIMIT 5000`)
+        .all(...(tool ? [sid, tool] : [sid]));
+      return json(res, 200, { session_id: sid, tool: tool || null, events: rows });
     }
     if (p === '/api/tool-activity') {
       const days = Math.max(1, Math.min(3650, Number(url.searchParams.get('days')) || 30));
