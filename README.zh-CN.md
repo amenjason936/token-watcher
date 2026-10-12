@@ -158,6 +158,26 @@ token-watcher --version
 滞后），从源文件首段读完整 cwd（events 表只存目录名，反推不唯一）；非 git 项目的会话
 `commits` 保持 `null`，不编造。
 
+### 合并另一台机器的用量（extra roots）
+
+在 VPS 或第二台电脑上跑 Agent？把它的数据目录镜像到本机，面板会把它并入同一
+工具的总账——去重键全局唯一，同一份会话从两台机器各同步一遍也只计一次。新建
+`~/.tokenmeter/extra-roots.json`：
+
+```json
+{ "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
+```
+
+然后定时把那台机器的会话拉下来（建好文件后需重启服务——root 列表在进程启动时
+读取一次）：
+
+```bash
+rsync -a your-vps:.claude/projects/ ~/.tokenmeter/remote/vps/claude/projects/
+```
+
+路径须为绝对路径（允许 `~/` 开头）；镜像目录暂不存在也不报错，首次同步前会被
+自然跳过。该文件只存在于创建它的那台机器上——你的合并配置不会离开自己的数据目录。
+
 ## 运行要求
 
 **Node ≥ 22.13**（`node:sqlite` 自该版本起免 `--experimental-sqlite` flag，零原生依赖）。

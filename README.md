@@ -109,6 +109,27 @@ token-watcher uninstall [--purge-data] [--yes]  # remove all local traces
 token-watcher --version
 ```
 
+### Merging usage from another machine (extra roots)
+
+Run agents on a VPS or a second laptop? Mirror its data dir here and the panel merges
+it into the same tool's totals — dedup keys are global, so the same transcript synced
+from two machines is still counted once. Create `~/.tokenmeter/extra-roots.json`:
+
+```json
+{ "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
+```
+
+then pull the other machine's sessions periodically (restart the service after
+creating the file — roots are read once at startup):
+
+```bash
+rsync -a your-vps:.claude/projects/ ~/.tokenmeter/remote/vps/claude/projects/
+```
+
+Paths must be absolute (`~/` allowed). A mirror dir that doesn't exist yet is skipped
+silently until the first sync. The file lives only on the machine that created it —
+your merge config never leaves your own data dir.
+
 ## Features
 
 - **Real-time**: FSEvents on every source dir → incremental parse → SSE push (<1s)

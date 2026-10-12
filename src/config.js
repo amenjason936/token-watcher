@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 export const HOME = homedir();
 
@@ -181,6 +182,42 @@ export const isOffline = () => process.env.TOKENMETER_OFFLINE === '1';
 
 export const DATA_DIR = join(HOME, '.tokenmeter');
 export const DB_PATH = join(DATA_DIR, 'tokenmeter.db');
+
+/**
+ * 本机扩展 root（~/.tokenmeter/extra-roots.json，可选）：给内置源追加扫描目录，如
+ *   { "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
+ * 场景：把另一台机器（VPS/别的电脑）上的 ~/.claude/projects 用 rsync 镜像到本机后并入
+ * 统计。dedup_key 全局唯一：两台机器各自的会话自然并存，重复搬运的内容也只计一次。
+ * 该文件只存在于配置它的那台机器上——个人配置留在数据目录，不进仓库与发布物。
+ * 目录暂不存在不算错误（镜像还没同步过/外置盘未挂载），枚举阶段会自然跳过；
+ * 修改后需重启服务才生效（config 在进程启动时读取一次）。
+ */
+function applyExtraRoots(sources) {
+  let map;
+  try {
+    map = JSON.parse(readFileSync(join(DATA_DIR, 'extra-roots.json'), 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn(`extra-roots.json 无法解析，已忽略：${err.message}`);
+    return;
+  }
+  if (typeof map !== 'object' || map === null || Array.isArray(map)) {
+    console.warn('extra-roots.json 应为 {"<tool>": ["绝对路径"]} 对象，已忽略');
+    return;
+  }
+  for (const [tool, roots] of Object.entries(map)) {
+    const src = sources.find(s => s.tool === tool);
+    if (!src) { console.warn(`extra-roots.json：未登记的工具 "${tool}"，已忽略`); continue; }
+    if (src.kind === 'poller') { console.warn(`extra-roots.json：${tool} 是账号级轮询源，无本地目录可扩展`); continue; }
+    if (!Array.isArray(roots)) { console.warn(`extra-roots.json：${tool} 的值应为路径数组，已忽略`); continue; }
+    for (let r of roots) {
+      if (typeof r !== 'string' || !(r = r.trim())) continue;
+      if (r.startsWith('~/')) r = join(HOME, r.slice(2));
+      else if (!r.startsWith('/')) { console.warn(`extra-roots.json：${tool} 的 "${r}" 不是绝对路径，已忽略`); continue; }
+      if (!src.roots.includes(r)) src.roots.push(r);
+    }
+  }
+}
+applyExtraRoots(SOURCES);
 /**
  * 默认端口可用 TOKENMETER_PORT 覆盖（写进 LaunchAgent / 容器 / 测试环境时免 --port）。
  * serve 在"未显式指定 --port"时遇占用会自动向后尝试（见 bin/tokenwatcher.js）。
