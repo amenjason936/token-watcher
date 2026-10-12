@@ -157,7 +157,9 @@ export async function buildLeaderboardReport(store, { now = Date.now(), roiFn = 
     if (roi?.configured) {
       let api = 0, paid = 0;
       for (const e of roi.entries || []) {
-        if (e.paid_cny != null) { api += e.api_cny || 0; paid += e.paid_cny; }
+        // 只合计比值有意义的条目：全缺价的 API 等值是"未知"而非 0，积分制工具没有牌价可折，
+        // 两者掺进来都只加月费不加等值，把公开比值压低
+        if (e.paid_cny != null && e.price_missing !== 'all' && e.credits == null) { api += e.api_cny || 0; paid += e.paid_cny; }
       }
       // 只发比值不发金额：×N 不暴露任何人的绝对开销
       if (paid > 0 && api > 0) roi_ratio = Math.round((api / paid) * 10) / 10;

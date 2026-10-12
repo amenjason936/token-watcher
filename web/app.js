@@ -1,7 +1,7 @@
 /* Token Watcher 面板：fetch /api/summary 渲染，SSE 实时刷新。
  * 纯逻辑（格式化/系列选择/配色/悬浮框定位）在 lib/ 下，可被 test/run.mjs 直接 import。
  * ECharts 走全局 UMD（index.html 里的 <script>），不参与模块图。 */
-import { esc, fmt, fmtShort, hhmm, ymd, windowLabel, fmtCountdown, prettyModel, displayModelName } from './lib/format.js';
+import { esc, fmt, fmtShort, hhmm, ymd, windowLabel, fmtCountdown, prettyModel, displayModelName, roiBadge } from './lib/format.js';
 import {
   TOOL_COLORS, TOOL_LABEL, MODEL_PALETTE, OTHER_COLOR, OTHER_DECAL, HEAT_COLORS, HEAT_EMPTY,
 } from './lib/theme.js';
@@ -302,16 +302,15 @@ function renderStatus(quota, balances, rates, recon, costs, credits) {
   const roi = lastSummary?.roi;
   if (roi?.configured && roi.entries.length) {
     const rows = roi.entries.map(e => {
-      const apiShort = e.credits != null && e.api_cny <= 0
+      const apiShort = e.price_missing === 'all' ? '无牌价'
+        : e.credits != null && e.api_cny <= 0
         ? `积分 ${e.credits.toFixed(1)}`
         : `¥${e.api_cny < 0.01 ? e.api_cny.toFixed(4) : e.api_cny.toFixed(2)}`;
-      const apiFull = e.credits != null && e.api_cny <= 0
+      const apiFull = e.price_missing === 'all' ? 'API 等值未知：本月用到的模型查不到牌价'
+        : e.credits != null && e.api_cny <= 0
         ? `积分 ${e.credits.toFixed(1)}`
         : `API 等值 ¥${e.api_cny < 0.01 ? e.api_cny.toFixed(4) : e.api_cny.toFixed(2)}`;
-      const badge = e.paid_cny == null ? '<span class="dim">月费未填</span>'
-        : e.ratio == null ? '<span class="dim">—</span>'
-        : e.ratio >= 1 ? `<b style="color:var(--good)">×${e.ratio.toFixed(1)} 划算</b>`
-        : `<b style="color:var(--warn)">×${e.ratio.toFixed(1)}</b>`;
+      const badge = roiBadge(e);
       const paid = e.paid_cny == null ? '' : ` / ¥${e.paid_cny.toFixed(0)}`;
       return `<div class="q-meta" style="margin-top:4px" title="${esc(apiFull)}${e.paid_cny != null ? esc(' / 月费 ¥' + e.paid_cny.toFixed(0)) : ' · 月费未填'}">
         <span>${esc(e.name)}</span>

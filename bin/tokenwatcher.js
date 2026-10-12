@@ -199,7 +199,8 @@ if (cmd === 'scan') {
     console.log(`订阅 ROI（本月，汇率 USD×${r.usd_to_cny}）`);
     for (const e of r.entries) {
       const api = e.credits != null && e.api_cny <= 0 ? `积分 ${e.credits.toFixed(1)}` : `API 等值 ¥${e.api_cny < 0.01 ? e.api_cny.toFixed(4) : e.api_cny.toFixed(2)}`;
-      const ratio = e.paid_cny == null ? '月费未填' : e.ratio == null ? '—' : `×${e.ratio.toFixed(1)}`;
+      const ratio = e.paid_cny == null ? '月费未填' : e.price_missing === 'all' ? '缺价（模型无牌价）'
+        : e.ratio == null ? '—' : `×${e.ratio.toFixed(1)}${e.price_missing === 'partial' ? '（部分缺价，偏低）' : ''}`;
       const paid = e.paid_cny == null ? ''.padEnd(13) : `月费 ¥${e.paid_cny.toFixed(2)}`.padEnd(13);
       console.log(`${String(e.name).padEnd(16)} ${api.padEnd(16)} ${paid} ${ratio}`);
     }

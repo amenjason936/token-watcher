@@ -84,7 +84,13 @@ export async function computeRoi(db, { rate = null } = {}) {
     } else {
       api = byTool.get(tool) ?? 0;
     }
+    // 有用量却查不到牌价的 token：全缺价时比值未知（不是 ×0），部分缺价时比值只是下限
+    const unpricedTokens = month.unpriced_by_tool_model
+      .filter(g => g.tool === tool && (!prefix || (g.model || '').toLowerCase().startsWith(prefix)))
+      .reduce((a, g) => a + g.tokens, 0);
     const credits = prefix ? null : (creditsByTool.get(tool) ?? null);
+    // 积分制工具本来就没有牌价可折（比值按设计为 null），不算"缺价"
+    const priceMissing = credits != null || unpricedTokens <= 0 ? null : api > 0 ? 'partial' : 'all';
     // 月费未填：条目仍显示（api 等值 + "月费未填"），不吞掉——填上价 ROI 即出
     const paid = cfg.price_cny ?? (cfg.price_usd != null ? cfg.price_usd * rate : null);
     entries.push({
@@ -94,8 +100,10 @@ export async function computeRoi(db, { rate = null } = {}) {
       api_cny: r4(api),          // 本月 API 等值（无牌价可折时为 0）
       credits,                   // 本月积分消耗（积分制工具且未用模型过滤时）
       paid_cny: paid == null ? null : r2(paid),
-      // 比值只在有月费、token 计价且非积分制时有意义
-      ratio: paid == null || credits != null ? null : (api > 0 ? api / paid : 0),
+      // 比值只在有月费、token 计价且非积分制时有意义；全缺价时未知
+      ratio: paid == null || credits != null || priceMissing === 'all' ? null : (api > 0 ? api / paid : 0),
+      price_missing: priceMissing, // null | 'partial'（比值偏低） | 'all'（比值未知）
+      unpriced_tokens: unpricedTokens,
     });
   }
   entries.sort((a, b) => (b.api_cny + (b.credits ?? 0)) - (a.api_cny + (a.credits ?? 0)));
