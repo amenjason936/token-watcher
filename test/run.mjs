@@ -945,6 +945,56 @@ const cli = (args) => spawnSync(process.execPath, ['--disable-warning=Experiment
   db.close();
 }
 
+/* ---------- 3d：extra-roots 本机扩展（多机用量合并场景） ----------
+ * ~/.tokenmeter/extra-roots.json 给内置源追加扫描目录：把另一台机器（如 VPS）的
+ * ~/.claude/projects 用 rsync 镜像到本机后并入统计。必须验证：tilde 展开、
+ * 未登记工具只警告不致命、以及同一条消息在本地与镜像各有一份时全局 dedup
+ * 只计一次——这是"合并不双计"的根基。 */
+{
+  const H2 = mkdtempSync(join(tmpdir(), 'tokenmeter-extra-'));
+  const env2 = { ...process.env, HOME: H2, USERPROFILE: H2, TOKENMETER_OFFLINE: '1', TOKENMETER_NO_KEYCHAIN: '1' };
+  const cli2 = (args) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'bin/tokenwatcher.js'), ...args], { encoding: 'utf8', env: env2 });
+  const w2 = (p, lines) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, lines.join('\n') + '\n'); };
+  const msg = (id, sid, cwd) => JSON.stringify({
+    timestamp: new Date(Date.now() - 60000).toISOString(), type: 'assistant', requestId: 'rr', sessionId: sid, cwd,
+    message: { id, model: 'claude-opus-5', usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 20 } },
+  });
+
+  // 本地会话（x1）+ 镜像会话（VPS 专属 v1 + 与本地相同的 x1：模拟两机各有同一份内容）
+  w2(join(H2, '.claude/projects/-Users-me-projL/s-local.jsonl'), [msg('x1', 's-local', '/Users/me/projL')]);
+  w2(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps.jsonl'),
+    [msg('v1', 's-vps', '/root/projR'), msg('x1', 's-local', '/Users/me/projL')]);
+  mkdirSync(join(H2, '.tokenmeter'), { recursive: true });
+  writeFileSync(join(H2, '.tokenmeter/extra-roots.json'), JSON.stringify({
+    'claude-code': ['~/mirror/vps/claude/projects'],
+    'not-a-tool': ['/tmp'],
+    codex: ['relative/path'],
+  }));
+  const r2 = cli2(['scan']);
+  ok('extra-roots + 未登记工具混入时 scan 退出码 0', r2.status === 0, r2.stderr.slice(0, 200));
+
+  const db2 = new DatabaseSync(join(H2, '.tokenmeter/tokenmeter.db'), { readOnly: true });
+  const cc = db2.prepare("SELECT COUNT(*) n, SUM(total_tokens) t FROM events WHERE tool='claude-code'").get();
+  ok('镜像并入 claude-code：x1 两份只计一次 → 2 事件', cc?.n === 2, JSON.stringify(cc));
+  ok('两台机器用量相加（120+120）', cc?.t === 240, JSON.stringify(cc));
+  ok('VPS 会话 project 取其 cwd 末段',
+    db2.prepare("SELECT project FROM events WHERE session_id='s-vps'").get()?.project === 'projR');
+  ok('镜像文件有独立游标行（可增量续扫）',
+    db2.prepare("SELECT COUNT(*) n FROM files WHERE path LIKE '%mirror/vps%'").get().n === 1);
+  db2.close();
+
+  // 坏配置（非法 JSON）不致命：正常退出且警告可见
+  const H3 = mkdtempSync(join(tmpdir(), 'tokenmeter-extra-bad-'));
+  mkdirSync(join(H3, '.tokenmeter'), { recursive: true });
+  writeFileSync(join(H3, '.tokenmeter/extra-roots.json'), '{oops');
+  const r3 = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'bin/tokenwatcher.js'), 'scan'],
+    { encoding: 'utf8', env: { ...process.env, HOME: H3, USERPROFILE: H3, TOKENMETER_OFFLINE: '1', TOKENMETER_NO_KEYCHAIN: '1' } });
+  ok('extra-roots.json 非法时不崩溃（退出码 0）', r3.status === 0, r3.stderr.slice(0, 200));
+  ok('非法配置有可见警告', r3.stderr.includes('extra-roots'), r3.stderr.slice(0, 200));
+  rmSync(H2, { recursive: true, force: true });
+  rmSync(H3, { recursive: true, force: true });
+}
+
 /* ---------- API 冒烟 ---------- */
 console.log('\n[4] API 冒烟');
 {
