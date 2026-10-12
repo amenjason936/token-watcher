@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { extname, join, resolve, dirname } from 'node:path';
+import { extname, join, resolve, dirname, sep } from 'node:path';
 import { WEB_DIR, ECHARTS_PATH, DB_PATH, isOffline, SOURCES } from './config.js';
 import { learnWorkbuddyRates } from './rates.js';
 import { loadPricing, computeCosts, computeRecon } from './pricing.js';
@@ -148,22 +148,22 @@ export async function buildSummary(store, scannerStats, days, { balanceStatus = 
   // 按自然日对齐：近 N 天 = 今天 0 点往前 N-1 天，避免 21 点查 7 天返回 8 个日桶
   const rangeStart = localRangeStart(days, now);
 
-  const allTime = db.prepare('SELECT COUNT(*) n, SUM(total_tokens) total FROM events').get();
+  // 全表按本地日聚合只扫一遍：全量总数、峰值日、活跃日集合都从这一份推出。
+  // 面板每次推送都会重取 summary，这几条曾各自全表扫描一次。
+  const dayAll = db.prepare(`
+    SELECT date(ts/1000, 'unixepoch', 'localtime') d, SUM(total_tokens) total, COUNT(*) n
+    FROM events GROUP BY d ORDER BY d`).all();
+  const allTime = dayAll.reduce((a, r) => ({ n: a.n + r.n, total: a.total + r.total }), { n: 0, total: 0 });
+  const peak = { peak: dayAll.reduce((m, r) => Math.max(m, r.total), 0) };
+  const dayAllRows = dayAll.map(r => ({ d: r.d, total: r.total }));
   const today = db.prepare('SELECT SUM(total_tokens) total FROM events WHERE ts >= ?').get(todayStart);
   const last7 = db.prepare('SELECT SUM(total_tokens) total FROM events WHERE ts >= ?').get(localRangeStart(7, now));
-  const peak = db.prepare(`
-    SELECT MAX(total) peak FROM (
-      SELECT SUM(total_tokens) total FROM events
-      GROUP BY date(ts/1000, 'unixepoch', 'localtime'))`).get();
   const todaySessions = db.prepare(
     'SELECT COUNT(DISTINCT session_id) n FROM events WHERE ts >= ?').get(todayStart);
 
   const dayRows = db.prepare(`
     SELECT date(ts/1000, 'unixepoch', 'localtime') d, tool, SUM(total_tokens) total
     FROM events WHERE ts >= ? GROUP BY d, tool ORDER BY d`).all(rangeStart);
-  const dayAllRows = db.prepare(`
-    SELECT date(ts/1000, 'unixepoch', 'localtime') d, SUM(total_tokens) total
-    FROM events GROUP BY d ORDER BY d`).all();
   const modelRows = db.prepare(`
     SELECT model, SUM(total_tokens) total, COUNT(*) n FROM events
     WHERE ts >= ? GROUP BY model ORDER BY total DESC LIMIT 10`).all(rangeStart);
@@ -174,8 +174,7 @@ export async function buildSummary(store, scannerStats, days, { balanceStatus = 
     SELECT ts, tool, model, project, input_tokens, cached_input, output_tokens, total_tokens
     FROM events ORDER BY ts DESC, id DESC LIMIT 15`).all();
 
-  const daySet = new Set(db.prepare(
-    `SELECT DISTINCT date(ts/1000, 'unixepoch', 'localtime') d FROM events`).all().map(r => r.d));
+  const daySet = new Set(dayAll.map(r => r.d));
 
   // byDay → [{day, tools: {tool: total}, total}]
   const byDayMap = new Map();
@@ -395,7 +394,7 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
                SUM(total_tokens) total, MAX(total_tokens) peak, MAX(project) project,
                GROUP_CONCAT(DISTINCT model) models
         FROM events WHERE date(ts/1000, 'unixepoch', 'localtime') = ? ${tool ? 'AND tool = ?' : ''}
-        GROUP BY session_id ORDER BY total DESC LIMIT 60`)
+        GROUP BY tool, session_id ORDER BY total DESC LIMIT 60`)
         .all(...(tool ? [day, tool] : [day]));
       return json(res, 200, { day, sessions: rows });
     }
@@ -476,8 +475,9 @@ export function startServer({ store, scanner, balancePoller, claudePoller, curso
     if (p === '/vendor/echarts.min.js') return serveFile(res, ECHARTS_PATH, MIME['.js']);
     if (p === '/') return serveFile(res, join(WEB_DIR, 'index.html'));
     // 静态资源：限制在 web 目录内
-    const safe = resolve(WEB_DIR, '.' + p);
-    if (safe.startsWith(resolve(WEB_DIR))) return serveFile(res, safe);
+    const webRoot = resolve(WEB_DIR);
+    const safe = resolve(webRoot, '.' + p);
+    if (safe.startsWith(webRoot + sep)) return serveFile(res, safe);
     res.writeHead(404); res.end();
   }, log));
 

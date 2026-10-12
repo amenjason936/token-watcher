@@ -223,8 +223,6 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
   // 不会受同行 input 赋值影响）。
   // 条目按 step 升序解析并链式推进权威基线：连续多个估算轮的增量各自归位，
   // 不会都从同一个旧基线重复扣减。
-  const updAuthentic = store.db.prepare(
-    'UPDATE events SET input_tokens = ?, total_tokens = ? + output_tokens + reasoning_tokens WHERE dedup_key = ?');
   if (st.pending.length && stepMap) {
     let pm = null;
     for (let i = 0; i < st.pending.length; i++) {
@@ -234,7 +232,7 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
       const m = info.model || null;
       if (pm && m && m !== pm) st.prevAuth = 0; // 换模型：缓存冷，基线清零
       const newInput = Math.max(0, info.contextTokens - st.prevAuth);
-      updAuthentic.run(newInput, newInput, p.key);
+      store.correctEventInput(p.key, newInput);
       st.prevAuth = info.contextTokens;
       pm = m;
       st.pending.splice(i, 1); i--;
@@ -307,8 +305,9 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
       dedup_key: key,
     });
     inserted += n;
-    // 全量重放（版本升级触发）时 dedup 命中旧行：若本次拿到权威 db 值，就地把旧估算补正
-    if (n === 0 && info) updAuthentic.run(input, input, key);
+    // 全量重放（版本升级触发）时 dedup 命中旧行：若本次拿到权威 db 值，就地把旧估算补正。
+    // 扫描器的写入代理恒返回 0，此时对新插入的行也会补一次——写入值与插入值相同，幂等。
+    if (n === 0 && info) store.correctEventInput(key, input);
     if (auth) {
       st.prevAuth = billedCtx;
     } else {

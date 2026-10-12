@@ -105,6 +105,10 @@ function migrate(db) {
   }
 }
 
+/** 采集器可能调用的全部写方法：stageWrites() 代理这些，其余（读）直通 */
+const STAGED_WRITES = ['insertEvent', 'insertDshEvent', 'insertToolCall', 'insertCredit',
+  'saveQuota', 'dropStaleCodexRows', 'correctEventInput'];
+
 export class Store {
   constructor(dbPath) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -137,6 +141,8 @@ export class Store {
       VALUES (?, ?, ?, ?, ?)`);
     this._insertCredit = this.db.prepare(
       'INSERT OR IGNORE INTO credit_usage (ts, tool, amount, dedup_key) VALUES (?, ?, ?, ?)');
+    this._correctEventInput = this.db.prepare(
+      'UPDATE events SET input_tokens = ?, total_tokens = ? + output_tokens + reasoning_tokens WHERE dedup_key = ?');
     this._getFile = this.db.prepare('SELECT * FROM files WHERE path = ?');
     this._upsertFile = this.db.prepare(`
       INSERT INTO files (path, tool, session_id, size, mtime_ms, offset, state_json, last_scan_ms)
@@ -216,6 +222,35 @@ export class Store {
   getQuota(tool) {
     const row = this.db.prepare('SELECT ts, data FROM quota WHERE tool = ?').get(tool);
     return row ? { ts: row.ts, data: JSON.parse(row.data) } : null;
+  }
+
+  /** 权威值到位后补正按估算入账的事件（antigravity）：total 用库里的 output/reasoning 重算 */
+  correctEventInput(dedupKey, input) {
+    this._correctEventInput.run(input, input, dedupKey);
+  }
+
+  /**
+   * 采集器专用的写入代理：写操作先按顺序记下，解析（含异步读文件、解压）结束后由扫描器
+   * 在一个同步事务里 replay()。事务因此从不跨 await——同一连接上的轮询器 / 设置写入
+   * 不会被卷进采集事务、被它的回滚一起撤销；写锁也只在回放那一刻持有，不挡并发的 CLI。
+   * 读操作照常直通。回放严格按记录顺序，同一文件内"先插后补"的语义不变。
+   * 代理上的写方法恒返回 0；真实新增数由 replay() 返回。采集器不得绕过代理直接写 store.db。
+   */
+  stageWrites() {
+    const ops = [];
+    const staged = Object.create(this);
+    for (const name of STAGED_WRITES) {
+      staged[name] = (...args) => { ops.push([name, args]); return 0; };
+    }
+    const replay = () => {
+      let inserted = 0;
+      for (const [name, args] of ops) {
+        const r = this[name](...args);
+        if (name === 'insertEvent' || name === 'insertDshEvent') inserted += r;
+      }
+      return inserted;
+    };
+    return { store: staged, replay };
   }
 
   insertToolCall(e) {

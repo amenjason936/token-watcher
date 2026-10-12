@@ -64,34 +64,46 @@ export function extractCursorCookie() {
   return `WorkosCursorSessionToken=${user}%3A%3A${jwt}`;
 }
 
-const stripQ = (s) => s.replace(/^"|"$/g, '').replace(/""/g, '"');
-function splitCsvLine(line) {
-  const out = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQ && c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-    else if (c === '"') inQ = !inQ;
-    else if (c === ',' && !inQ) { out.push(cur); cur = ''; }
-    else cur += c;
+/**
+ * CSV 文本 → 记录数组（RFC 4180：引号内的逗号、换行与 "" 转义都不切分；容忍 CRLF）。
+ * 不能先按行切再拆字段——引号字段里带换行时那一行会被拆成两条坏记录。
+ */
+function parseCsvRecords(text) {
+  const records = [];
+  let row = [], cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cur); cur = '';
+      if (row.some((f) => f.trim())) records.push(row);
+      row = [];
+    } else cur += c;
   }
-  out.push(cur);
-  return out;
+  row.push(cur);
+  if (row.some((f) => f.trim())) records.push(row);
+  return records;
 }
 
 /** CSV 文本 → 事件数组（列名解析，兼容 Cursor 加列改序） */
 export function parseCursorCsv(text) {
-  const lines = text.split('\n').filter((l) => l.trim());
-  if (lines.length < 2) return [];
+  const records = parseCsvRecords(text);
+  if (records.length < 2) return [];
   const cols = new Map();
-  splitCsvLine(lines[0]).forEach((h, i) => cols.set(stripQ(h), i));
+  records[0].forEach((h, i) => cols.set(h.trim(), i));
   const need = ['Date', 'Model', 'Input (w/ Cache Write)', 'Input (w/o Cache Write)', 'Cache Read', 'Output Tokens'];
   if (need.some((n) => !cols.has(n))) return [];
 
   const rows = [];
   const seen = new Map(); // 指纹 → 出现序号（同值重复行按序区分）
-  for (let i = 1; i < lines.length; i++) {
-    const f = splitCsvLine(lines[i]).map(stripQ);
+  for (let i = 1; i < records.length; i++) {
+    const f = records[i];
     const ts = Date.parse(f[cols.get('Date')]);
     const model = f[cols.get('Model')];
     const cacheW = Number(f[cols.get('Input (w/ Cache Write)')]) || 0;
