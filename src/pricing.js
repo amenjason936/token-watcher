@@ -95,12 +95,17 @@ export function aggregateCosts(db, since, { rate = 7.2, table = {} } = {}) {
            SUM(cache_write) cw, SUM(output_tokens) oi
     FROM events WHERE ts >= ? GROUP BY tool, model, peak`).all(since);
   const byModel = new Map(), byTool = new Map(), byToolModel = new Map(), unpriced = new Set();
+  const unpricedByToolModel = []; // ROI 要区分"没用量"和"有用量但无牌价"，后者不能折成 0 元
   let total = 0;
   for (const r of rows) {
     const tokens = (r.fi || 0) + (r.ci || 0) + (r.oi || 0);
     if (tokens <= 0) continue;
     const p = priceOf(r.model, table, rate);
-    if (!p) { unpriced.add(r.model); continue; }
+    if (!p) {
+      unpriced.add(r.model);
+      unpricedByToolModel.push({ tool: r.tool, model: r.model, tokens });
+      continue;
+    }
     const c = ((r.fi / 1e6) * p.inCny + (r.ci / 1e6) * p.cacheCny
       + (r.cw / 1e6) * p.cacheWCny + (r.oi / 1e6) * p.outCny) * (r.peak ? 1 : p.offPeak);
     total += c;
@@ -119,6 +124,7 @@ export function aggregateCosts(db, since, { rate = 7.2, table = {} } = {}) {
     by_tool: [...byTool.values()].sort((a, b) => b.cost_cny - a.cost_cny),
     by_tool_model: [...byToolModel.values()],
     unpriced: [...unpriced],
+    unpriced_by_tool_model: unpricedByToolModel,
   };
 }
 
