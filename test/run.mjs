@@ -980,7 +980,8 @@ const cli = (args) => spawnSync(process.execPath, ['--disable-warning=Experiment
   ok('VPS 会话 project 取其 cwd 末段',
     db2.prepare("SELECT project FROM events WHERE session_id='s-vps'").get()?.project === 'projR');
   ok('镜像文件有独立游标行（可增量续扫）',
-    db2.prepare("SELECT COUNT(*) n FROM files WHERE path LIKE '%mirror/vps%'").get().n === 1);
+    db2.prepare('SELECT COUNT(*) n FROM files WHERE path = ?')
+      .get(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps.jsonl')).n === 1);
   db2.close();
 
   // 坏配置（非法 JSON）不致命：正常退出且警告可见
