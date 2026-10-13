@@ -133,7 +133,13 @@ async function dashboardCases(ok) {
         const dataset = {};
         for (const [, k, v] of attrs.matchAll(/data-([a-z]+)="([^"]*)"/g)) dataset[k] = unesc(v);
         const cls = (attrs.match(/class="([^"]*)"/) || [, ''])[1].split(/\s+/).filter(Boolean);
-        return { cls, dataset, html: chunk, style: {}, handlers: {}, addEventListener(t, f) { this.handlers[t] = f; } };
+        // 标记里写死的内联样式也要算进去（浏览器会把它解析成 style 属性）
+        const style = {};
+        for (const decl of unesc((attrs.match(/style="([^"]*)"/) || [, ''])[1]).split(';')) {
+          const at = decl.indexOf(':');
+          if (at > 0) style[decl.slice(0, at).trim().replace(/-([a-z])/g, (_m, c) => c.toUpperCase())] = decl.slice(at + 1).trim();
+        }
+        return { cls, dataset, html: chunk, style, handlers: {}, addEventListener(t, f) { this.handlers[t] = f; } };
       }) : [];
     },
     get innerHTML() { return this._html; },
