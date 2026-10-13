@@ -11,6 +11,8 @@
  *   tokenwatcher wrapped [--year 2026] [--json]    年度用量报告
  *   tokenwatcher leaderboard [on <昵称>|off|status|push|url <地址>]
  *                                                  社区排行榜（默认关闭，显式开启）
+ *   tokenwatcher extra-roots [list|add|remove <tool> <路径>]
+ *                                                  多机合并镜像目录的登记（改后需重启）
  *   tokenwatcher doctor                            环境与数据源体检
  *   tokenwatcher install-agent [--port 8787]       装成 macOS 开机自启服务
  *   tokenwatcher uninstall-agent                   停止并移除该服务
@@ -62,6 +64,8 @@ const BANNER = `token-watcher v${VERSION}
   roi [--json]                     订阅 ROI（本月 API 等值 vs 实付）
   leaderboard [on <昵称>|off|status|push|url <地址>]
                                    社区排行榜（默认关闭；只上报聚合数字）
+  extra-roots [list|add|remove <tool> <路径>]
+                                   多机合并镜像目录登记（改后需重启）
   doctor                           环境与数据源体检
   install-agent / uninstall-agent  macOS 开机自启
   uninstall [--purge-data] [--yes] 摘除所有本机痕迹（数据默认保留）
@@ -111,6 +115,13 @@ if (cmd === 'install-agent' || cmd === 'uninstall-agent' || cmd === 'bar') {
 if (cmd === 'uninstall') {
   const { uninstallAll } = await import('../src/uninstall.js');
   const { ok } = await uninstallAll({ log, purgeData: !!opts.purgeData, yes: !!opts.yes });
+  process.exit(ok ? 0 : 1);
+}
+
+// 纯配置编辑，不碰数据库——必须在 new Store 之前返回，避免为改个 JSON 建出库文件
+if (cmd === 'extra-roots') {
+  const { extraRootsCommand } = await import('../src/extraRoots.js');
+  const ok = extraRootsCommand(opts.positionals ?? [], { log });
   process.exit(ok ? 0 : 1);
 }
 

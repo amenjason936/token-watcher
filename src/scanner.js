@@ -29,6 +29,13 @@ const COLLECTORS = {
   qoder: async (store, args) => ({ ...(await collectQoderFile(store, args)), state: { _v: args.version } }),
 };
 
+/**
+ * 同步盘冲突副本（Dropbox「name (1).ext」、Syncthing「name.sync-conflict-*.ext」）
+ * 内容与原文件相同，但按文件名派生去重键的源（codex 的键含 rollout 茎名）会因改名
+ * 整份双计；按消息 id 去重的源虽天然免疫，也没必要扫两遍——枚举阶段统一跳过。
+ */
+const isSyncConflict = (name) => name.includes('.sync-conflict-') || / \(\d+\)\.[^.]+$/.test(name);
+
 async function* walkByExt(root, match) {
   let entries;
   try { entries = await readdir(root, { withFileTypes: true }); }
@@ -36,7 +43,7 @@ async function* walkByExt(root, match) {
   for (const e of entries) {
     const p = join(root, e.name);
     if (e.isDirectory()) yield* walkByExt(p, match);
-    else if (e.isFile() && match(e.name)) yield p;
+    else if (e.isFile() && !isSyncConflict(e.name) && match(e.name)) yield p;
   }
 }
 

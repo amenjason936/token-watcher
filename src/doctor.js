@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { SOURCES, DB_PATH, DATA_DIR, isOffline } from './config.js';
+import { SOURCES, DB_PATH, DATA_DIR, EXTRA_ROOTS, isOffline } from './config.js';
+import { isUnderRoot } from './scanner.js';
 import { computeHealth } from './server.js';
 import { zcodeQuotaTargets } from './zcodeQuota.js';
 import { readClaudeOauthToken } from './claudeUsage.js';
@@ -60,6 +61,27 @@ export async function runDoctor(store, scannerStats, { log = console.log } = {})
     if (h.last_error && h.status !== 'error') tail.push(`上次错误：${h.last_error}`);
     log(`  ${icon} ${pad(src?.label ?? h.tool, 12)} ${pad(h.status, 5)} 事件 ${String(h.events).padStart(7)}  ${tail.join('；')}`);
     if (h.status === 'error') problems.push(`${h.tool} 解析失败`);
+  }
+
+  // extra roots：多机合并的镜像目录要看得见——同步悄悄断了没人发现，统计会静默缺量
+  log('扩展 root（多机合并镜像）');
+  const extraPairs = Object.entries(EXTRA_ROOTS).flatMap(([t, roots]) => roots.map((r) => [t, r]));
+  if (!extraPairs.length) {
+    log('  · 未配置（可选；多台机器用量合并的配方见 README「extra roots」）');
+  } else {
+    for (const [tool, root] of extraPairs) {
+      if (!existsSync(root)) { log(`  ⚠ ${tool} ${root} 目录不存在（未同步/未挂载？恢复后自动续扫）`); continue; }
+      let count = 0, newest = 0;
+      for (const r of store.db.prepare('SELECT path, mtime_ms FROM files WHERE tool = ?').all(tool)) {
+        if (!isUnderRoot(r.path, root)) continue;
+        count++;
+        if (r.mtime_ms > newest) newest = r.mtime_ms;
+      }
+      if (!count) { log(`  · ${tool} ${root} 尚无数据（首次同步后自动入库）`); continue; }
+      const idleDays = Math.floor((Date.now() - newest) / 86400_000);
+      const when = new Date(newest).toLocaleString('zh-CN');
+      log(`  ${idleDays > 7 ? '⚠' : '✓'} ${tool} ${root}（${count} 文件，最新 ${when}${idleDays > 7 ? `，${idleDays} 天无新数据（远端未用或同步中断）` : ''}）`);
+    }
   }
 
   // 凭证探测只报"有没有"，不打印任何值

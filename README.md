@@ -103,6 +103,8 @@ token-watcher wrapped [--year 2026] [--json]    # year in review
 token-watcher roi [--json]                     # subscription ROI (API-equivalent vs paid)
 token-watcher leaderboard [on <name>|off|status|push|url <url>]
                                                 # community leaderboard (opt-in, aggregate numbers only)
+token-watcher extra-roots [list|add|remove <tool> <path>]
+                                                # mirror roots for the multi-machine merge
 token-watcher doctor                            # environment + store + per-source health
 token-watcher uninstall [--purge-data] [--yes]  # remove all local traces
 token-watcher --version
@@ -110,24 +112,39 @@ token-watcher --version
 
 ### Merging usage from another machine (extra roots)
 
-Run agents on a VPS or a second laptop? Mirror its data dir here and the panel merges
-it into the same tool's totals — dedup keys are global, so the same transcript synced
-from two machines is still counted once. Create `~/.tokenmeter/extra-roots.json`:
+Work across several machines? Mirror the other machine's data dirs onto this one and
+the panel merges them into the same tool's totals. Dedup keys are global, so the same
+transcript arriving twice — including sync-drive conflict copies — is still counted
+once. Register a mirror root in `~/.tokenmeter/extra-roots.json` (or use the CLI
+below), then restart the service (roots are read once at startup):
 
 ```json
-{ "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
+{ "claude-code": ["~/.tokenmeter/remote/home-pc/claude/projects"] }
 ```
-
-then pull the other machine's sessions periodically (restart the service after
-creating the file — roots are read once at startup):
 
 ```bash
-rsync -a your-vps:.claude/projects/ ~/.tokenmeter/remote/vps/claude/projects/
+token-watcher extra-roots list                     # show configured mirror roots
+token-watcher extra-roots add claude-code ~/mirror/home-pc/claude/projects
+token-watcher extra-roots remove claude-code ~/mirror/home-pc/claude/projects
 ```
 
-Paths must be absolute (`~/` allowed). A mirror dir that doesn't exist yet is skipped
-silently until the first sync. The file lives only on the machine that created it —
-your merge config never leaves your own data dir.
+Any transport that delivers files works — pick what fits your machines:
+
+| Transport | jsonl sources (Claude Code, Codex, Grok …) | sqlite sources (ZCode, OpenCode) |
+| --- | --- | --- |
+| rsync over SSH, pulled on a timer (cron / LaunchAgent) | ✅ | ✅ copies a quiescent snapshot |
+| Syncthing / cloud sync drive, continuous | ✅ conflict copies are skipped automatically | ❌ live WAL databases tear on sync drives |
+| USB stick / manual copy | ✅ | ✅ copy while the source tool is closed |
+
+- Cursor needs no merging: its usage CSV is account-level, so any one machine with
+  credentials polls the whole account.
+- `token-watcher doctor` shows each mirror root and how long since its last new data,
+  so a silently broken sync becomes visible.
+- Community leaderboard: if machine A mirrors machine B, only one of them should
+  report to the leaderboard, or B's usage is counted twice there.
+
+The file lives only on the machine that created it — your merge config never leaves
+your own data dir.
 
 ## Features
 

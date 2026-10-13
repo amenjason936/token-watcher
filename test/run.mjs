@@ -984,6 +984,51 @@ const cli = (args) => spawnSync(process.execPath, ['--disable-warning=Experiment
       .get(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps.jsonl')).n === 1);
   db2.close();
 
+  // 同步盘冲突副本（Dropbox「name (1).ext」、Syncthing「.sync-conflict-*」）不得入库：
+  // 按文件名派生去重键的源（codex）会因改名整份双计；枚举层统一跳过，连游标行都不该有
+  w2(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps (1).jsonl'), [msg('v1', 's-vps', '/root/projR')]);
+  w2(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps.sync-conflict-20261013.jsonl'), [msg('v1', 's-vps', '/root/projR')]);
+  ok('出现冲突副本后 scan 退出码 0', cli2(['scan']).status === 0);
+  {
+    const db2b = new DatabaseSync(join(H2, '.tokenmeter/tokenmeter.db'), { readOnly: true });
+    const cf = (p) => db2b.prepare('SELECT COUNT(*) n FROM files WHERE path = ?').get(p).n;
+    ok('Dropbox 式冲突副本没有游标行（枚举已跳过）',
+      cf(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps (1).jsonl')) === 0);
+    ok('Syncthing 式冲突副本没有游标行（枚举已跳过）',
+      cf(join(H2, 'mirror/vps/claude/projects/-root-projR/s-vps.sync-conflict-20261013.jsonl')) === 0);
+    ok('claude-code 事件仍为 2（冲突内容未重复入库）',
+      db2b.prepare("SELECT COUNT(*) n FROM events WHERE tool='claude-code'").get().n === 2);
+    db2b.close();
+  }
+
+  // doctor 可见性：镜像 root 及其新鲜度要出现在体检里（同步悄悄断掉得看得见）
+  {
+    const dr = cli2(['doctor']);
+    ok('doctor 含扩展 root 段', dr.status === 0 && dr.stdout.includes('扩展 root'), dr.stdout.slice(0, 160));
+    ok('doctor 列出镜像 root 及健康标记', /✓ claude-code .+mirror/.test(dr.stdout), dr.stdout.slice(0, 200));
+  }
+
+  // CLI 登记台：list/add/remove 与校验（独立 HOME，不碰上面已扫好的库）
+  {
+    const H4 = mkdtempSync(join(tmpdir(), 'tokenmeter-extra-cli-'));
+    const cli4 = (args) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', join(ROOT, 'bin/tokenwatcher.js'), ...args],
+      { encoding: 'utf8', env: { ...process.env, HOME: H4, USERPROFILE: H4, TOKENMETER_OFFLINE: '1', TOKENMETER_NO_KEYCHAIN: '1' } });
+    const cfg4 = () => JSON.parse(read(join(H4, '.tokenmeter/extra-roots.json'), 'utf8'));
+    const l0 = cli4(['extra-roots', 'list']);
+    ok('extra-roots list（空）退出码 0 且有提示', l0.status === 0 && l0.stdout.includes('未配置'), l0.stdout.slice(0, 120));
+    ok('add 未登记工具拒绝', cli4(['extra-roots', 'add', 'no-such-tool', '/abs/mirror']).status === 1);
+    ok('add 轮询源拒绝（无本地目录可扩展）', cli4(['extra-roots', 'add', 'cursor', '/abs/mirror']).status === 1);
+    ok('add 相对路径拒绝', cli4(['extra-roots', 'add', 'claude-code', 'relative/x']).status === 1);
+    ok('add 成功且写入配置', cli4(['extra-roots', 'add', 'claude-code', '/abs/mirror']).status === 0
+      && JSON.stringify(cfg4()) === '{"claude-code":["/abs/mirror"]}', JSON.stringify(cfg4()));
+    ok('重复 add 幂等', cli4(['extra-roots', 'add', 'claude-code', '/abs/mirror']).status === 0 && cfg4()['claude-code'].length === 1);
+    ok('remove 后条目清空', cli4(['extra-roots', 'remove', 'claude-code', '/abs/mirror']).status === 0
+      && Object.keys(cfg4()).length === 0);
+    cli4(['extra-roots', 'add', 'claude-code', '/abs/mirror']);
+    ok('list 显示已登记条目', cli4(['extra-roots', 'list']).stdout.includes('/abs/mirror'));
+    rmSync(H4, { recursive: true, force: true });
+  }
+
   // 坏配置（非法 JSON）不致命：正常退出且警告可见
   const H3 = mkdtempSync(join(tmpdir(), 'tokenmeter-extra-bad-'));
   mkdirSync(join(H3, '.tokenmeter'), { recursive: true });

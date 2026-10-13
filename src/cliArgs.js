@@ -2,7 +2,7 @@ import { DEFAULT_PORT } from './config.js';
 
 const COMMANDS = [
   'scan', 'serve', 'today', 'sessions', 'wrapped', 'roi', 'doctor',
-  'install-agent', 'uninstall-agent', 'uninstall', 'bar', 'leaderboard',
+  'install-agent', 'uninstall-agent', 'uninstall', 'bar', 'leaderboard', 'extra-roots',
 ];
 
 export function parseArgs(argv) {

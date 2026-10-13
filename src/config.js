@@ -186,12 +186,13 @@ export const DB_PATH = join(DATA_DIR, 'tokenmeter.db');
 /**
  * 本机扩展 root（~/.tokenmeter/extra-roots.json，可选）：给内置源追加扫描目录，如
  *   { "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
- * 场景：把另一台机器（VPS/别的电脑）上的 ~/.claude/projects 用 rsync 镜像到本机后并入
- * 统计。dedup_key 全局唯一：两台机器各自的会话自然并存，重复搬运的内容也只计一次。
- * 该文件只存在于配置它的那台机器上——个人配置留在数据目录，不进仓库与发布物。
- * 目录暂不存在不算错误（镜像还没同步过/外置盘未挂载），枚举阶段会自然跳过；
- * 修改后需重启服务才生效（config 在进程启动时读取一次）。
+ * 场景：把另一台机器（VPS/家里电脑）上的 ~/.claude/projects 用任意传输（rsync/SSH、
+ * Syncthing、手动拷贝）镜像到本机后并入统计。dedup_key 全局唯一：两台机器各自的会话
+ * 自然并存，重复搬运的内容也只计一次。该文件只存在于配置它的那台机器上——个人配置
+ * 留在数据目录，不进仓库与发布物。目录暂不存在不算错误（镜像还没同步过/外置盘未
+ * 挂载），枚举阶段会自然跳过；修改后需重启服务才生效（config 在进程启动时读取一次）。
  */
+export const EXTRA_ROOTS = {}; // tool -> [实际生效的追加路径]（供 doctor / CLI 展示）
 function applyExtraRoots(sources) {
   let map;
   try {
@@ -213,7 +214,10 @@ function applyExtraRoots(sources) {
       if (typeof r !== 'string' || !(r = r.trim())) continue;
       if (r.startsWith('~/')) r = join(HOME, r.slice(2));
       else if (!r.startsWith('/')) { console.warn(`extra-roots.json：${tool} 的 "${r}" 不是绝对路径，已忽略`); continue; }
-      if (!src.roots.includes(r)) src.roots.push(r);
+      if (!src.roots.includes(r)) {
+        src.roots.push(r);
+        (EXTRA_ROOTS[tool] ??= []).push(r);
+      }
     }
   }
 }

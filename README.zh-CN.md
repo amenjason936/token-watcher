@@ -146,6 +146,8 @@ token-watcher sessions --from 2026-09-01 --to 2026-09-30 --csv --out s.csv
 token-watcher sessions --day 2026-09-20 --git      # 每个会话挂上窗口内的 git 提交（产出归因）
 token-watcher wrapped [--year 2026] [--json]       # 年度报告（全年/最猛一天/连续天数/项目 Top）
 token-watcher roi [--json]                     # 订阅 ROI（本月 API 等值 vs 实付）
+token-watcher extra-roots [list|add|remove <tool> <路径>]
+                                  # 多机合并镜像目录的登记（改后需重启服务）
 token-watcher doctor              # 环境与数据源体检（node 版本/zstd/库完整性/逐源健康）
 token-watcher uninstall           # 摘除开机自启等本机痕迹
 token-watcher uninstall --purge-data --yes         # 连 ~/.tokenmeter 数据目录一起删（不可恢复）
@@ -160,23 +162,36 @@ token-watcher --version
 
 ### 合并另一台机器的用量（extra roots）
 
-在 VPS 或第二台电脑上跑 Agent？把它的数据目录镜像到本机，面板会把它并入同一
-工具的总账——去重键全局唯一，同一份会话从两台机器各同步一遍也只计一次。新建
-`~/.tokenmeter/extra-roots.json`：
+多台电脑跑 Agent？把其他机器的数据目录镜像到本机，面板会把它并入同一工具的
+总账。去重键全局唯一，同一份会话同步两遍——包括同步盘的冲突副本——也只计一次。
+在 `~/.tokenmeter/extra-roots.json` 登记镜像目录（或用下面的 CLI），重启服务后
+生效（root 列表在进程启动时读取一次）：
 
 ```json
-{ "claude-code": ["~/.tokenmeter/remote/vps/claude/projects"] }
+{ "claude-code": ["~/.tokenmeter/remote/home-pc/claude/projects"] }
 ```
-
-然后定时把那台机器的会话拉下来（建好文件后需重启服务——root 列表在进程启动时
-读取一次）：
 
 ```bash
-rsync -a your-vps:.claude/projects/ ~/.tokenmeter/remote/vps/claude/projects/
+token-watcher extra-roots list                     # 查看已登记的镜像目录
+token-watcher extra-roots add claude-code ~/mirror/home-pc/claude/projects
+token-watcher extra-roots remove claude-code ~/mirror/home-pc/claude/projects
 ```
 
-路径须为绝对路径（允许 `~/` 开头）；镜像目录暂不存在也不报错，首次同步前会被
-自然跳过。该文件只存在于创建它的那台机器上——你的合并配置不会离开自己的数据目录。
+任何能把文件送到本机的传输都行，按机器条件选：
+
+| 传输方式 | jsonl 源（Claude Code、Codex、Grok…） | sqlite 源（ZCode、OpenCode） |
+| --- | --- | --- |
+| SSH + rsync 定时拉（cron / LaunchAgent） | ✅ | ✅ 拉的是静止副本 |
+| Syncthing / 网盘持续同步 | ✅ 冲突副本已自动跳过 | ❌ 活库 WAL 会被同步盘撕裂 |
+| U 盘 / 手动拷贝 | ✅ | ✅ 需先关闭源工具再拷 |
+
+- Cursor 无需合并：它的用量 CSV 是账号级的，任一台配了凭证的机器轮询到的就是
+  整个账号的用量。
+- `token-watcher doctor` 会显示每个镜像 root 及最近新数据的时间——同步悄悄断掉
+  会变得可见。
+- 社区排行榜：若 A 镜像了 B，只应有一台向榜单上报，否则 B 的用量在榜上双计。
+
+该文件只存在于创建它的那台机器上——你的合并配置不会离开自己的数据目录。
 
 ## 运行要求
 
