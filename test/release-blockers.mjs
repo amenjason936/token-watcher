@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { parseArgs } from '../src/cliArgs.js';
 import { Store } from '../src/store.js';
-import { canonicalCodexKey } from '../src/codexKeys.js';
+import { canonicalCodexKey, codexKeyArchivePath } from '../src/codexKeys.js';
 import { readLinesFrom } from '../src/collectors/lines.js';
 
 const SELF = fileURLToPath(import.meta.url);
@@ -119,15 +119,22 @@ export async function testReleaseBlockers(ok) {
           assert.equal(st.countEvents().total, total);
           assert.equal(st.db.prepare('SELECT COUNT(*) n FROM tool_calls').get().n, 1);
           if (kind !== 'canonical') {
-            const archived = st.db.prepare("SELECT row_json FROM codex_key_migration_backup WHERE table_name='events'")
-              .all().map(r => JSON.parse(r.row_json));
-            for (const original of before.filter(r => r.tool === 'codex')) {
-              assert.deepEqual(archived.find(r => r.id === original.id), { ...original });
-            }
-            for (const { source_rowid, ...original } of callsBefore) {
-              const row = st.db.prepare("SELECT row_json FROM codex_key_migration_backup WHERE table_name='tool_calls' AND source_rowid=?").get(source_rowid);
-              assert.deepEqual(JSON.parse(row.row_json), original);
-            }
+            // 归档已搬到同目录的独立库，不再占着热库、也不再进每日快照；内容要求不变。
+            assert.equal(st.db.prepare(
+              "SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name='codex_key_migration_backup'"
+            ).get().n, 0);
+            const side = new DatabaseSync(codexKeyArchivePath(path));
+            try {
+              const archived = side.prepare("SELECT row_json FROM codex_key_migration_backup WHERE table_name='events'")
+                .all().map(r => JSON.parse(r.row_json));
+              for (const original of before.filter(r => r.tool === 'codex')) {
+                assert.deepEqual(archived.find(r => r.id === original.id), { ...original });
+              }
+              for (const { source_rowid, ...original } of callsBefore) {
+                const row = side.prepare("SELECT row_json FROM codex_key_migration_backup WHERE table_name='tool_calls' AND source_rowid=?").get(source_rowid);
+                assert.deepEqual(JSON.parse(row.row_json), original);
+              }
+            } finally { side.close(); }
           }
           assert.equal(st.db.prepare('PRAGMA quick_check').get().quick_check, 'ok');
           st.close(); st = new Store(path);
