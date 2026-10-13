@@ -2004,6 +2004,7 @@ await (await import('./menubar-contract.mjs')).testMenubar(ok);
 await (await import('./roi-price-gaps.mjs')).testRoiPriceGaps(ok);
 await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
 await (await import('./prune-roots.mjs')).testPruneRoots(ok);
+await (await import('./codex-key-archive.mjs')).testCodexKeyArchive(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });

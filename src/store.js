@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeModel } from './models.js';
-import { canonicalCodexKey, migrateCodexKeys } from './codexKeys.js';
+import { canonicalCodexKey, migrateCodexKeys, offloadCodexKeyArchive } from './codexKeys.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -84,8 +84,10 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_ts ON tool_calls(ts);
 `;
 
 /** 增量迁移：旧库补列、模型名归一（幂等，每次启动跑一遍，DISTINCT 很小） */
-function migrate(db) {
+function migrate(db, dbPath) {
   migrateCodexKeys(db);
+  // 归档搬家纯属腾空间：失败不该拦住启动，原表留在库里下次再试。
+  try { offloadCodexKeyArchive(db, dbPath); } catch { /* 并发占锁或磁盘满：下次启动重试 */ }
   const cols = db.prepare('PRAGMA table_info(events)').all().map(c => c.name);
   if (!cols.includes('trace_id')) db.exec('ALTER TABLE events ADD COLUMN trace_id TEXT');
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_session'").get();
@@ -118,7 +120,7 @@ export class Store {
     // 常驻 serve 与一次性 CLI（today/scan）会并发访问同一库：不设超时则立刻 SQLITE_BUSY
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.db.exec(SCHEMA);
-    try { migrate(this.db); }
+    try { migrate(this.db, dbPath); }
     catch (err) { this.db.close(); throw err; }
     this._insertEvent = this.db.prepare(`
       INSERT OR IGNORE INTO events
