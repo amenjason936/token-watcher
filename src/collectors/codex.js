@@ -3,7 +3,7 @@ import { readLinesFrom } from './lines.js';
 import { normalizeModel } from '../models.js';
 import { quotaFromRateLimits } from '../codexQuota.js';
 import { nextUsage, usageSnapshot } from '../codexUsage.js';
-import { decompressZstd } from '../zstd.js';
+import { decompressZstdLines } from '../zstd.js';
 
 /**
  * Codex rollout 采集器（~/.codex/sessions 与 archived_sessions，2.4GB 量级）。
@@ -154,12 +154,9 @@ export async function collectCodexFile(store, { path, fileId, offset, state, ver
   let newOffset;
   if (compressed) {
     // Compressed files are snapshots: their byte size is not a decompressed JSONL offset.
-    const text = (await decompressZstd(path)).toString('utf8');
-    let start = 0, end;
-    while ((end = text.indexOf('\n', start)) !== -1) {
-      processLine(text.slice(start, end));
-      start = end + 1;
-    }
+    // 大归档解压后可超 V8 字符串上限（~512MiB，issue #12），必须流式逐行解；
+    // 无 zstd CLI 时 decompressZstdLines 内部回落内置整缓冲实现（单帧，既有边界）。
+    for await (const line of decompressZstdLines(path)) processLine(line);
     newOffset = 0;
   } else {
     ({ newOffset } = await readLinesFrom(path, offset, processLine));

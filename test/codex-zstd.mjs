@@ -8,7 +8,7 @@ import zlib from 'node:zlib';
 import { Store } from '../src/store.js';
 import { Scanner } from '../src/scanner.js';
 import { SOURCES } from '../src/config.js';
-import { decompressZstd } from '../src/zstd.js';
+import { decompressZstd, decompressZstdLines } from '../src/zstd.js';
 
 const stamp = n => new Date(Date.parse('2026-09-20T10:00:00Z') + n * 1000).toISOString();
 const usage = (input, cached, output) => ({ input_tokens: input, cached_input_tokens: cached,
@@ -285,6 +285,60 @@ export async function testCodexZstd(ok) {
     });
   } finally {
     SOURCES.forEach((source, i) => { source.roots = originalRoots[i]; });
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 流式逐行解压（issue #12）：大归档解压后超 V8 字符串上限，codex 改走流式。
+ * 行产出必须与旧的「整缓冲 + 整串循环」完全一致（含多字节、长行、尾部残行丢弃），
+ * 坏档必须抛错（scanner 逐文件回滚的前提），无 CLI 时回落内置实现。
+ */
+export async function testZstdLines(ok) {
+  console.log('\n[codex] zstd 流式逐行解压');
+  const root = mkdtempSync(join(tmpdir(), 'tw-zstd-lines-'));
+  try {
+    // 多字节内容 + 超长行（跨 chunk）+ 尾部残行（无换行，应丢弃）
+    const text = [
+      JSON.stringify({ n: 1, p: '/工作目录/项目A' }),
+      JSON.stringify({ n: 2, p: 'x'.repeat(70000) }),
+      JSON.stringify({ n: 3, p: '尾行前' }),
+      '{"partial": ',
+    ].join('\n');
+    const file = join(root, 's.jsonl.zst');
+    writeFileSync(file, compress(text));
+
+    // 等价基准：旧整串循环的切分结果
+    const whole = (await decompressZstd(file)).toString('utf8');
+    const expect = [];
+    let s = 0, e;
+    while ((e = whole.indexOf('\n', s)) !== -1) { expect.push(whole.slice(s, e)); s = e + 1; }
+
+    if (zstdBin) {
+      const got = [];
+      for await (const line of decompressZstdLines(file, { bins: [zstdBin] })) got.push(line);
+      ok('流式行序列与整串循环全等（多字节/长行/残行语义）',
+        JSON.stringify(got) === JSON.stringify(expect), `${got.length} vs ${expect.length} 行`);
+
+      // 截断的 zst：必须抛错，不能静默半档（scanner 靠异常触发逐文件回滚）
+      const buf = readFileSync(file);
+      const broken = join(root, 'broken.jsonl.zst');
+      writeFileSync(broken, buf.subarray(0, Math.max(1, Math.floor(buf.length / 2))));
+      let threw = null;
+      try { for await (const l of decompressZstdLines(broken, { bins: [zstdBin] })) { void l; } }
+      catch (err) { threw = err; }
+      ok('截断的 zst 流式解压抛错（坏档案仍是单文件错误）', !!threw, String(threw).slice(0, 120));
+    } else {
+      console.log('  – 无 zstd CLI，流式直连断言跳过（内置回落路径仍验证）');
+    }
+
+    // 无 CLI：回落内置整缓冲实现，行语义一致
+    if (typeof zlib.zstdDecompressSync === 'function') {
+      const got = [];
+      for await (const line of decompressZstdLines(file, { bins: [] })) got.push(line);
+      ok('无 CLI 时回落内置实现，行序列一致', JSON.stringify(got) === JSON.stringify(expect));
+    }
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
