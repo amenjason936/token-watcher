@@ -115,7 +115,10 @@ async function dashboardCases(ok) {
     { session_id: 'proj.v2:"x"&y', tool: 'grok', first_ts: 1, last_ts: 2, calls: 1, total: 5, peak: 5, models: '', project: null },
     // Cursor 账户级计费：没有会话 ID（库里是 NULL）
     { session_id: null, tool: 'cursor', first_ts: 1, last_ts: 2, calls: 3, total: 4242, peak: 0, models: '', project: null },
+    // 空串 ID 同样打不开（/api/session/ → 400），按无 ID 处理
+    { session_id: '', tool: 'cursor', first_ts: 1, last_ts: 2, calls: 1, total: 4343, peak: 0, models: '', project: null },
   ];
+  const noSid = (s) => s.session_id == null || s.session_id === '';
   const requests = [];
   // 详情接口的应答按会话 ID 安排；默认一条事件
   let detail = () => ({ body: { events: [{ ts: 1, total_tokens: 1 }] } });
@@ -157,7 +160,7 @@ async function dashboardCases(ok) {
   const click = async (row) => { row?.handlers.click?.(); await new Promise(r => setImmediate(r)); };
   ok('会话列表渲染出每一行', rows.length === sessions.length, String(rows.length));
   for (const [i, s] of sessions.entries()) {
-    if (s.session_id == null) continue;
+    if (noSid(s)) continue;
     requests.length = 0;
     await click(rows[i]);
     const want = `/api/session/${encodeURIComponent(s.session_id)}?tool=${encodeURIComponent(s.tool)}`;
@@ -165,15 +168,19 @@ async function dashboardCases(ok) {
     ok(`${s.tool} 行可点击（指针）`, rows[i]?.style.cursor === 'pointer', JSON.stringify(rows[i]?.style));
   }
 
-  // 无会话 ID 的行：照常显示，但不可点击
-  const nul = rows[sessions.findIndex(s => s.session_id == null)];
-  ok('无会话 ID 行：仍然渲染（工具名与 tokens 可见）',
-    !!nul && nul.html.includes(TOOL_LABEL.cursor) && nul.html.includes('4242'), nul?.html?.slice(0, 200));
-  ok('无会话 ID 行：没有指针光标', !!nul && nul.style.cursor !== 'pointer', JSON.stringify(nul?.style));
-  ok('无会话 ID 行：没有点击处理', !!nul && !nul.handlers.click, Object.keys(nul?.handlers || {}).join(','));
-  requests.length = 0;
-  await click(nul);
-  ok('无会话 ID 行：点击不发请求', requests.length === 0, JSON.stringify(requests));
+  // 无会话 ID 的行（NULL 与空串）：照常显示，但不可点击
+  for (const [i, s] of sessions.entries()) {
+    if (!noSid(s)) continue;
+    const row = rows[i];
+    const tag = s.session_id === null ? 'NULL' : '空串';
+    ok(`无会话 ID 行：${tag} 仍然渲染（工具名与 tokens 可见）`,
+      !!row && row.html.includes(TOOL_LABEL[s.tool]) && row.html.includes(String(s.total)), row?.html?.slice(0, 200));
+    ok(`无会话 ID 行：${tag} 没有指针光标`, !!row && row.style.cursor !== 'pointer', JSON.stringify(row?.style));
+    ok(`无会话 ID 行：${tag} 没有点击处理`, !!row && !row.handlers.click, Object.keys(row?.handlers || {}).join(','));
+    requests.length = 0;
+    await click(row);
+    ok(`无会话 ID 行：${tag} 点击不发请求`, requests.length === 0, JSON.stringify(requests));
+  }
 
   // 详情标题带工具名：同 ID 的 codex / claude-code 会话标题不同
   chart.titles.length = 0;
