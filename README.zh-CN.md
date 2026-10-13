@@ -264,6 +264,14 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 
 ## 更新日志
 
+### 1.9.0（2026-10-13）
+
+- **多机用量合并（extra roots）**：把另一台机器（VPS / 家里电脑）的数据目录用任意传输（SSH + rsync 定时拉、Syncthing / 网盘持续同步、手动拷贝）镜像到本机，在 `~/.tokenmeter/extra-roots.json` 登记后并入同一工具的总账。去重键全局唯一，同步冲突副本自动跳过，不会双计；逐请求粒度、会话钻取、5h 窗口估算全量覆盖。sqlite 源（ZCode / OpenCode）请勿走同步盘（活库 WAL 会被撕裂，用 rsync 或关工具后拷贝）；Cursor 是账号级数据无需合并。新增 `token-watcher extra-roots list|add|remove`，`doctor` 显示镜像目录的文件数与新鲜度（7 天无新数据提示疑似同步中断）。多机合并下社区排行榜只应由一台机器上报，否则镜像方与被镜像方双计。
+- **采集与守护修复批**（感谢 [@amenjason936](https://github.com/amenjason936) 的 [#3](https://github.com/luwill/token-watcher/pull/3)–[#7](https://github.com/luwill/token-watcher/pull/7)）：服务端口重试不再泄漏后台任务与定时器；ROI 对无牌价模型如实显示「缺价」而非 ×0；菜单栏正确解码 Codex 多窗口配额；采集器写库改为暂存回放（事务不跨 await）；Cursor CSV 按 RFC4180 解析；测试套件与调用方环境完全隔离。
+- **游标清理按路径段归属 root**（[#9](https://github.com/luwill/token-watcher/pull/9)，感谢 @amenjason936）：配置任意镜像目录后，同前缀的兄弟目录（如 `/a/mac` 与 `/a/mac-old`）的游标行不再被误删。
+- **Codex 键迁移归档搬出热库**（[#10](https://github.com/luwill/token-watcher/pull/10)，感谢 [@xmasdong](https://github.com/xmasdong)）：一次性恢复归档移入同目录独立文件，不再占用统计库、也不再被每日快照复制 7 份（贡献者实测 1.2 GB 库降至 264 MB）。恢复仍可查（ATTACH 侧库），搬家逐行核对后才删原表，失败保持原样下次重试。
+- 三平台 CI（macOS / Ubuntu / Windows × Node 22.13 / 24）全绿，新增多机合并、冲突副本、CLI 登记台与归档搬家的定向检查。
+
 ### 1.8.4（2026-10-10）
 
 - **补回 Codex 压缩日志中的历史用量**（感谢 [@horacehht](https://github.com/horacehht) 的 [#2](https://github.com/luwill/token-watcher/pull/2)）：支持 `.jsonl.zst` / `.jsonl.zstd`，普通、压缩与归档副本统一去重；采集器 v5 首次运行会重扫仍在本机的历史。压缩文件解码失败会回滚当前文件，不覆盖其已有记录。
