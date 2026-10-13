@@ -264,6 +264,13 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 
 ## 更新日志
 
+### 1.9.1（2026-10-13）
+
+- **大体积 Codex 压缩归档改为流式解析**（[#12](https://github.com/luwill/token-watcher/issues/12)）：解压后超过 V8 字符串上限（~512MiB）的 `.jsonl.zst` 归档此前每轮扫描都报解析错误，现改为 `zstd -dc` 边解边逐行消费（无 zstd CLI 时回落内置整缓冲实现，边界不变）；行语义与原整串解析严格一致，截断/损坏档案仍按单文件错误整体回滚，绝不静默吞掉。
+- **会话钻取修复**（[#11](https://github.com/luwill/token-watcher/pull/11)，感谢 [@amenjason936](https://github.com/amenjason936)；1.9.0 的 npm 包已提前包含）：`/api/session/:sid` 接受含 `.`/`:`/空格等文件名字符的真实会话 ID（原白名单正则会静默 400），残缺百分号编码按 400 处理而非 500；钻取按 `(tool, session_id)` 取数，两个工具的同名会话不再被合并成一条。
+- Homebrew 安装路径修正为 `brew install luwill/tap/token-watcher`（原文档指向不存在的仓库）；tap 同步补到 1.9.0。
+- 三平台 CI 全绿，新增流式解压等价回归（与整串解析输出全等）与坏档抛错检查。
+
 ### 1.9.0（2026-10-13）
 
 - **多机用量合并（extra roots）**：把另一台机器（VPS / 家里电脑）的数据目录用任意传输（SSH + rsync 定时拉、Syncthing / 网盘持续同步、手动拷贝）镜像到本机，在 `~/.tokenmeter/extra-roots.json` 登记后并入同一工具的总账。去重键全局唯一，同步冲突副本自动跳过，不会双计；逐请求粒度、会话钻取、5h 窗口估算全量覆盖。sqlite 源（ZCode / OpenCode）请勿走同步盘（活库 WAL 会被撕裂，用 rsync 或关工具后拷贝）；Cursor 是账号级数据无需合并。新增 `token-watcher extra-roots list|add|remove`，`doctor` 显示镜像目录的文件数与新鲜度（7 天无新数据提示疑似同步中断）。多机合并下社区排行榜只应由一台机器上报，否则镜像方与被镜像方双计。
