@@ -120,7 +120,7 @@ npx 下不建议装开机自启：生成的 LaunchAgent 会指向 npx 的缓存�
 ### 方式四：Homebrew（macOS）
 
 ```bash
-brew install luwill/token-watcher/token-watcher
+brew install luwill/tap/token-watcher
 token-watcher serve
 ```
 
@@ -384,7 +384,7 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 - **serve 体验**：默认端口被占时自动向后尝试（显式 `--port` 仍大声失败，防菜单栏胶囊
   连不上）；交互终端自动打开面板（`--no-open` 可关，launchd 下不会开）；`TOKENMETER_PORT`
   环境变量可改默认端口
-- **Homebrew 分发**：`brew install luwill/token-watcher/token-watcher`（formula 在
+- **Homebrew 分发**：`brew install luwill/tap/token-watcher`（formula 在
   `packaging/homebrew/`，直连 npm tarball）
 - Claude 官方配额卡的重置倒计时按 ISO 时间归一，不再恒显 `--`
 

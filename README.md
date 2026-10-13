@@ -92,7 +92,7 @@ token-watcher install-agent             # launchd auto-start (macOS)
 token-watcher bar                       # macOS menu-bar capsule
 ```
 
-Homebrew: `brew install luwill/token-watcher/token-watcher`
+Homebrew: `brew install luwill/tap/token-watcher`
 
 ### CLI reference
 
