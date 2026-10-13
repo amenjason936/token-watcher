@@ -146,8 +146,9 @@ async function dashboardCases(ok) {
       requests.push(u);
       if (u.startsWith('/api/sessions')) return { ok: true, status: 200, json: async () => ({ sessions }) };
       const { status = 200, body, reject, badJson } = detail(u);
-      if (reject) throw new TypeError('Failed to fetch');
-      return { ok: status === 200, status, json: async () => { if (badJson) throw new SyntaxError('bad json'); return body; } };
+      // 错误对象取自面板所在的 realm（浏览器里 fetch / json() 抛的就是页面自己的 TypeError / SyntaxError）
+      if (reject) throw vm.runInContext("new TypeError('Failed to fetch')", context);
+      return { ok: status === 200, status, json: async () => { if (badJson) throw vm.runInContext("new SyntaxError('bad json')", context); return body; } };
     },
     esc, encodeURIComponent, Date, JSON, Promise,
     TOOL_LABEL, prettyModel: (m) => m, fmt: String, fmtShort: String,
