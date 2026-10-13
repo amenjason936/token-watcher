@@ -2050,6 +2050,7 @@ await (await import('./roi-price-gaps.mjs')).testRoiPriceGaps(ok);
 await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
 await (await import('./prune-roots.mjs')).testPruneRoots(ok);
 await (await import('./codex-key-archive.mjs')).testCodexKeyArchive(ok);
+await (await import('./session-drilldown.mjs')).testSessionDrilldown(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });

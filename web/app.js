@@ -573,7 +573,7 @@ async function loadSessions(day) {
     const hh = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     host.innerHTML = `<table>
       <thead><tr><th>时间段</th><th>工具</th><th>模型</th><th>项目</th><th class="num">tokens</th><th class="num">调用</th><th class="num">峰值上下文(估)</th></tr></thead>
-      <tbody>${sessions.map(s => `<tr class="sess-row" data-sid="${esc(s.session_id)}">
+      <tbody>${sessions.map(s => `<tr class="sess-row" data-sid="${esc(s.session_id)}" data-tool="${esc(s.tool)}">
         <td class="dim" style="font-variant-numeric:tabular-nums">${hh(s.first_ts)}–${hh(s.last_ts)}</td>
         <td><span class="badge ${esc(s.tool)}">${esc(TOOL_LABEL[s.tool] || s.tool)}</span></td>
         <td class="ellip" title="${esc((s.models || '').split(',').filter(Boolean).map(prettyModel).join(', '))}">${esc((s.models || '').split(',').filter(Boolean).map(prettyModel).slice(0, 2).join(', ')) || '-'}</td>
@@ -584,14 +584,15 @@ async function loadSessions(day) {
       </tr>`).join('')}</tbody></table>`;
     host.querySelectorAll('.sess-row').forEach(tr => {
       tr.style.cursor = 'pointer';
-      tr.addEventListener('click', () => showSessionDetail(tr.dataset.sid));
+      tr.addEventListener('click', () => showSessionDetail(tr.dataset.sid, tr.dataset.tool));
     });
   } catch { /* 静默 */ }
 }
 
-async function showSessionDetail(sid) {
+// 列表按 (tool, session_id) 分组：两个工具可能同名会话，钻取必须带上 tool 才不会合并
+async function showSessionDetail(sid, tool) {
   try {
-    const res = await fetch(`/api/session/${encodeURIComponent(sid)}`);
+    const res = await fetch(`/api/session/${encodeURIComponent(sid)}?tool=${encodeURIComponent(tool)}`);
     const { events } = await res.json();
     const box = document.getElementById('sess-detail');
     if (!events?.length) return;
