@@ -1,5 +1,18 @@
 # 修复 token 统计与官方口径的三处偏差
 
+## 2026-10-14 发布 1.9.3 并首次验证 npm Trusted Publisher
+
+用户明确授权发布 1.9.3 并完成 npm Trusted Publisher 首次验证。本次授权适用于已验收的安装包及相应 GitHub 发布环境审核；后续版本仍须另行确认。
+
+1. [x] 核对 main、registry、发布环境与 npm/GitHub 官方文档；准备 1.9.3 版本、lockfile、更新日志和发布说明。
+2. [x] 829 项完整隔离回归通过；69 个包内文件与源码逐字节匹配，universal 为 arm64 + x86_64；干净安装版本和八个资源/API 端点通过。
+3. [ ] 提交推送版本，确认全部 main CI 后创建标签、检查 Release 草稿产物，再通过已授权的 GitHub 发布审核执行 OIDC 发布。
+4. [ ] 独立核对 registry/latest、公开 GitHub Release、产物及 provenance；确认 npm Publisher 已验证，同步 Homebrew 并记录结果。
+
+测试沿用此前授权的临时目录与合成数据库/清理范围。正式用量库、本机服务不进入本次发布操作。
+
+本地候选 SHA-256=8423ec28fc9ce04af1ca489da7dacb228149b22443bf15f3cd68cfd94b562ee5。云端发布前将独立下载并比较实际草稿产物，最终公开校验值以被审核并发布的云端 artifact 为准。
+
 ## 2026-10-14 每日维护 Loop 与 CI/CD
 
 1. [x] 阅读 Anthropic Loops、Codex 定时任务和 GitHub/npm 官方文档；盘点 PR/Issue 与现有 CI。
