@@ -5,7 +5,7 @@
 1. [x] 阅读 Anthropic Loops、Codex 定时任务和 GitHub/npm 官方文档；盘点 PR/Issue 与现有 CI。
 2. [x] 实现增量队列扫描、维护协议和有明确停止条件的每日定时循环；真实队列重复扫描 changed=0，Codex 每日任务已启用。
 3. [x] 补齐受 CI 校验的构建/发布工作流；默认仅演练，正式发布需明确选择；YAML/Bash/嵌入 Node 语法通过，补充草稿复用与附件核对后完整隔离回归 829 项通过。
-4. [ ] 首轮 main CI 的 10 个任务全绿，云端重复扫描 changed=0，verify 安装包与已发行 1.9.2 校验值一致；定时任务已启用。补充草稿核对逻辑后的云端 CI/演练待完成。
+4. [x] 完成真实队列、云端重复扫描、定时任务与发布演练验收。补充草稿核对后 [CI 38508200184](https://github.com/luwill/token-watcher/actions/runs/38508200184) 的 10 个任务全绿；[verify 38508226478](https://github.com/luwill/token-watcher/actions/runs/38508226478) 产物与已发行 1.9.2 校验值一致，npm/GitHub 正式发布步骤均跳过。
 
 默认日程为每天 09:00（Asia/Taipei）；自动扫描、有限修复与草稿 PR，合并和正式发版由维护者确认。npm 发布采用 OIDC，不复制本机令牌到仓库；每次仍经人工审核。真实日志/数据库与本机服务不进入日常维护测试。
 
