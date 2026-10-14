@@ -6,12 +6,16 @@
 
 1. [x] 核对远端 main、GitHub/npm 版本和发布流程，确定补丁版本 1.9.2；整理公开修复与恢复说明。
 2. [x] 完成版本回归、macOS universal 构建、打包与干净安装验证；820 项回归、67 个包内文件与源码逐字节匹配、干净安装的 CLI/实数采集/Flash 与 Argon 计价及 8 个资源端点通过。
-3. [ ] 提交推送本轮修复，确认多平台 CI；准备标签、GitHub Release 和 npm 发布包。
-4. [ ] 发布并核对 GitHub、npm registry、安装包校验值和 Homebrew 更新结果。
+3. [x] 提交推送本轮修复，确认多平台 CI；提交 9f2bc23、v1.9.2 标签已推送，GitHub Release 草稿与发布包已准备。
+4. [x] 发布并核对 GitHub、npm registry、安装包校验值和 Homebrew 更新结果。
 
-npm 预检：当前会话返回 E401，registry 发布需要账户持有者恢复登录并完成验证。测试沿用本轮已授权的隔离目录和清理范围。本机数据库备份、逐键对账及个人用量证据保留本地，不进入公开发行包。
+npm 预检曾返回 E401；用户完成 CLI 登录与本次发布身份验证后恢复发布。测试沿用本轮已授权的隔离目录和清理范围。本机数据库备份、逐键对账及个人用量证据保留本地，不进入公开发行包。
 
 发布候选：token-watcher-1.9.2.tgz，SHA-256=76ba2ed8528e5020082e75ff96e2e15215c8d9fa8175ec393c24dcff65579679；菜单栏 universal 为 x86_64 + arm64。package-lock 与 package.json 统一为 1.9.2，公开恢复与价格说明包含在包内。
+
+GitHub 验收：[CI 38499911237](https://github.com/luwill/token-watcher/actions/runs/38499911237) 的 10 个任务全部成功（macOS/Linux/Windows、Node 22.13/24，另含安装与 import 冒烟）。安装包的 GitHub SHA-256 与本地候选一致。
+
+发布完成：GitHub [v1.9.2 Release](https://github.com/luwill/token-watcher/releases/tag/v1.9.2) 已公开并标为 latest，标签对应代码提交 9f2bc23；包含安装包与 SHA256SUMS。npm 已确认 version=1.9.2、latest=1.9.2，公开下载包与本地候选逐字节相同，SHA-1=921ed1f03f13be8c65deca7598cea9cc3e58ec63，SHA-512 与发布候选一致。Homebrew tap 已同步 1.9.2 地址与 SHA-256，[tap 提交 10e1d50](https://github.com/luwill/homebrew-tap/commit/10e1d50589a4f07e2d8baf1602903361232796c7)；公式 Ruby 语法通过。升级命令：npm install -g token-watcher@1.9.2。
 
 ## 2026-10-14 已完成的 Antigravity 与模型定价修复
 
