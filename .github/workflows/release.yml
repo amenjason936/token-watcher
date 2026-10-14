@@ -142,6 +142,34 @@ jobs:
             }
           } finally { child.kill(); }
           JS
+      - name: Check existing draft before npm can publish
+        if: needs.gate.outputs.mode != 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+          RELEASE_DIR: ${{ runner.temp }}/release
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, mkdtempSync } from 'node:fs';
+          import { join } from 'node:path';
+          // BEGIN release draft guard
+          const env = process.env;
+          const releases = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', `repos/${env.GH_REPO}/releases?per_page=100`], { encoding: 'utf8' })).flat();
+          const existing = releases.find(r => r.tag_name === env.RELEASE_TAG);
+          if (existing) {
+            if (!existing.draft) throw new Error('Public Release exists; refusing overwrite');
+            const dir = mkdtempSync(join(env.RUNNER_TEMP, 'reviewed-draft-'));
+            const archive = `token-watcher-${env.RELEASE_VERSION}.tgz`;
+            execFileSync('gh', ['release', 'download', env.RELEASE_TAG, '--repo', env.GH_REPO, '--pattern', archive, '--pattern', 'SHA256SUMS', '--dir', dir]);
+            for (const file of [archive, 'SHA256SUMS']) {
+              if (!readFileSync(join(dir, file)).equals(readFileSync(join(env.RELEASE_DIR, file)))) throw new Error('Draft artifact differs from verified package');
+            }
+          }
+          // END release draft guard
+          JS
       - uses: actions/upload-artifact@v4
         with:
           name: release-package
@@ -208,20 +236,44 @@ jobs:
         with:
           name: release-package
           path: release
-      - name: Create reviewed release without overwriting an existing release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Create or promote the matching reviewed draft
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.gate.outputs.tag }}
           RELEASE_VERSION: ${{ needs.gate.outputs.version }}
           RELEASE_MODE: ${{ needs.gate.outputs.mode }}
+          RELEASE_DIR: release
         run: |
-          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to overwrite it'
-            exit 1
-          fi
           cd release
           sha256sum --check SHA256SUMS
-          flags=(--draft)
-          if [ "$RELEASE_MODE" = publish ]; then flags=(--latest); fi
-          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --verify-tag --title "$RELEASE_TAG" --notes-file RELEASE_NOTES.md "${flags[@]}" "token-watcher-${RELEASE_VERSION}.tgz" SHA256SUMS
+          cd ..
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, mkdtempSync } from 'node:fs';
+          import { join } from 'node:path';
+          // BEGIN release draft guard
+          const env = process.env;
+          const releases = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', `repos/${env.GH_REPO}/releases?per_page=100`], { encoding: 'utf8' })).flat();
+          const existing = releases.find(r => r.tag_name === env.RELEASE_TAG);
+          if (existing) {
+            if (!existing.draft) throw new Error('Public Release exists; refusing overwrite');
+            const dir = mkdtempSync(join(env.RUNNER_TEMP, 'reviewed-draft-'));
+            const archive = `token-watcher-${env.RELEASE_VERSION}.tgz`;
+            execFileSync('gh', ['release', 'download', env.RELEASE_TAG, '--repo', env.GH_REPO, '--pattern', archive, '--pattern', 'SHA256SUMS', '--dir', dir]);
+            for (const file of [archive, 'SHA256SUMS']) {
+              if (!readFileSync(join(dir, file)).equals(readFileSync(join(env.RELEASE_DIR, file)))) throw new Error('Draft artifact differs from verified package');
+            }
+          }
+          // END release draft guard
+          if (existing) {
+            if (env.RELEASE_MODE === 'publish') execFileSync('gh', ['release', 'edit', env.RELEASE_TAG, '--repo', env.GH_REPO, '--draft=false', '--latest']);
+          } else {
+            execFileSync('gh', ['release', 'create', env.RELEASE_TAG, '--repo', env.GH_REPO, '--verify-tag', '--title', env.RELEASE_TAG,
+              '--notes-file', 'release/RELEASE_NOTES.md', env.RELEASE_MODE === 'publish' ? '--latest' : '--draft',
+              `release/token-watcher-${env.RELEASE_VERSION}.tgz`, 'release/SHA256SUMS']);
+          }
+          JS

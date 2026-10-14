@@ -37,16 +37,22 @@
 
 任何模式都只检出已进入 main 的版本提交；缺失/失败的 CI、版本不一致或已有公开版本阻止正式发布。CI 等待最多 5 分钟；超时等 CI 完成后重新触发，不扩大权限。
 
+标签产生的已有 Release 草稿只有在安装包与 SHA256SUMS 均逐字节匹配时才能复用。发布前检查一次，公开前再检查一次；公开版本、被替换/缺失的附件或 GitHub 读取失败均阻止继续。`publish` 在 npm 校验通过后将匹配的草稿公开，避免草稿阻挡后续正式发版。
+
 演练命令：`gh workflow run release.yml --ref main -f tag=v1.9.2 -f mode=verify`。
 
-## 一次性启用无人值守 npm 发布
+## npm 发布授权与验证状态
 
-在 npm 的 token-watcher 包设置中添加 GitHub Actions Trusted Publisher：owner=`luwill`、repository=`token-watcher`、workflow=`release.yml`、environment=`npm-release`，并允许直接 `npm publish`。建议在 GitHub 的该 environment 设置维护者审查人。参见 [npm 官方可信发布者](https://docs.npmjs.com/trusted-publishers/)。
+在 npm 的 token-watcher 包设置中添加 GitHub Actions Trusted Publisher：owner=`luwill`、repository=`token-watcher`、workflow=`release.yml`、environment=`npm-release`，并允许直接 `npm publish`。GitHub 的该 environment 已要求 `luwill` 审核，且只接受 `main` 分支；允许维护者本人发起并审核发布。参见 [npm 官方可信发布者](https://docs.npmjs.com/trusted-publishers/)。
 
-这项账户设置须由维护者完成。未配置时 `verify` 和 `draft` 可正常工作；`publish` 会因身份校验失败而停止，不能将本机 npm token 复制到仓库绕过。Homebrew tap 更新在 registry 发布并校验后按现有流程办理。
+2026-10-14 用户批准后已保存上述 Trusted Publisher，允许 `npm publish` 与 npm 必带的 `npm stage publish`，未授予独立 dist-tag 管理权限。npm 页面显示 `Pending validation`，要求在 2026-10-16 03:47 UTC（Asia/Taipei 11:47）前完成真实发布以验证配置。本次不新增产品版本，配置成功不能算作 OIDC 实际发布验证；超过页面期限或授权失效时须由维护者检查 npm 设置。
+
+未配置或失效时 `verify` 和 `draft` 可正常工作；`publish` 会因身份校验失败而停止，不能将本机 npm token 复制到仓库绕过。Homebrew tap 更新在 registry 发布并校验后按现有流程办理。
 
 正式发版前：在 main 合入版本与 lockfile、对应 `docs/RELEASE-<版本>.md`、回归及打包白名单变化，待 CI 全绿后创建版本标签，检查演练产物，再明确选择 publish。不要为了维护脚本变更自动发布产品补丁。
 
 ## 本地试运行
 
 `node scripts/maintenance/scan.mjs --state-dir <本地状态目录>` 连续执行两次，第二次应无新增变化；`--dry-run` 仅输出，不更新状态。脚本只读 GitHub 元数据，不执行远端代码、创建评论、合并或发布，也不接触用量数据库。首次真实队列试运行只能算队列采集验收，不能冒充实际完成了 bug 修复或发版。
+
+2026-10-14 验收：首轮 826 项完整回归通过，[main CI 的 10 个任务](https://github.com/luwill/token-watcher/actions/runs/38505452228)成功。[首次云端扫描](https://github.com/luwill/token-watcher/actions/runs/38505648089)得到 1 个 PR、2 个 Issue；[重复扫描](https://github.com/luwill/token-watcher/actions/runs/38507005427) changed=0、closed=0。[发布 verify 演练](https://github.com/luwill/token-watcher/actions/runs/38505651176)通过，1.9.2 universal 包与已公开的安装包 SHA-256 一致。补充草稿复用与附件核对后，本地 829 项完整回归通过；Codex 每日 09:00 任务已启用，未执行新的正式发布。
