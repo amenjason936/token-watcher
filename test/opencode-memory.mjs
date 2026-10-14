@@ -86,6 +86,29 @@ export async function testOpencodeMemory(ok) {
       } finally { store.close(); }
     });
 
+    await check('message and part iterators survive GC between rows', async () => {
+      const file = join(root, 'gc.db');
+      makeDb(file, {
+        messages: [0, 1].map(i => [`m${i}`, { role: 'assistant', time: { created: T + i }, tokens }]),
+        parts: [0, 1].map(i => [`p${i}`, { type: 'tool', tool: 'bash', callID: `c${i}` }]),
+      });
+      const src = pathToFileURL(join(import.meta.dirname, '../src/collectors/opencode.js')).href;
+      // 在真实采集器的两种循环里强制 GC：旧 Node 的 iterator 不会替调用方持有语句。
+      const script = `
+        const { collectOpencodeDb } = await import(${JSON.stringify(src)});
+        const events = [], calls = [];
+        const sink = {
+          insertEvent(e) { global.gc(); events.push(e); return 1; },
+          insertToolCall(c) { global.gc(); calls.push(c); },
+        };
+        const r = await collectOpencodeDb(sink, { tool: 'opencode', path: ${JSON.stringify(file)}, version: 2 });
+        console.log(JSON.stringify({ events: events.length, calls: calls.length, inserted: r.inserted }));`;
+      const res = spawnSync(process.execPath, ['--expose-gc', '--disable-warning=ExperimentalWarning',
+        '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 30_000 });
+      assert.equal(res.status, 0, `exit ${res.status}\n${(res.stderr || '').slice(0, 600)}`);
+      assert.deepEqual(JSON.parse(res.stdout.trim().split('\n').pop()), { events: 2, calls: 2, inserted: 2 });
+    });
+
     await check('first scan of a large part table fits a 48 MiB heap', async () => {
       const file = join(root, 'large.db');
       const big = 'x'.repeat(256 * 1024);

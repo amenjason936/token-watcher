@@ -33,6 +33,15 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
   try {
     const sessDir = db.prepare('SELECT directory FROM session WHERE id = ?');
 
+    // Node 22.13 的 iterator 只保留语句的原生指针，GC 可在读完前释放临时语句。
+    // 让 iterator 持有 JS 强引用，message / part 两种查询都保持逐行读取。
+    const iterate = (sql, ...params) => {
+      const statement = db.prepare(sql);
+      const rows = statement.iterate(...params);
+      Object.defineProperty(rows, 'statementRef', { value: statement });
+      return rows;
+    };
+
     /**
      * data 列只在 SQLite 里取字段，不整列读进 JS：part.data 里是完整的工具输出（读到的文件、
      * 命令输出），首次全量扫描时整表 .all() 会把几个 GB 的字符串一次性搬进堆里，
@@ -57,7 +66,7 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
      * 完成后的 UPDATE 再也读不到（实测 1.18.31 下漏掉八成消息）。按 time_updated 增量，
      * 被改过的行会重新进入视野；也顺带免疫了 rowid 复用问题。
      */
-    const msgs = db.prepare(`
+    const msgs = iterate(`
       SELECT id, session_id, time_created, time_updated,
         ${field('$.role')} AS role, ${field('$.modelID')} AS model_id,
         ${field('$.time.created')} AS created,
@@ -65,8 +74,8 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
         ${field('$.tokens.input')} AS t_input, ${field('$.tokens.output')} AS t_output,
         ${field('$.tokens.reasoning')} AS t_reasoning,
         ${field('$.tokens.cache.read')} AS t_cache_read, ${field('$.tokens.cache.write')} AS t_cache_write
-      FROM message WHERE time_updated > ? ORDER BY time_updated`)
-      .iterate(Math.max(0, st.msgUpdatedAt - UPDATED_LOOKBACK_MS));
+      FROM message WHERE time_updated > ? ORDER BY time_updated`,
+      Math.max(0, st.msgUpdatedAt - UPDATED_LOOKBACK_MS));
     for (const m of msgs) {
       st.msgUpdatedAt = Math.max(st.msgUpdatedAt, Number(m.time_updated) || 0);
       // user 消息没有 tokens：跳过，不能记成 0 用量的事件
@@ -101,13 +110,13 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
 
     // 非工具 part 在 SQL 里就筛掉；水位直接推到本轮读取范围的上界，
     // 上界取自查询前的 MAX(rowid)，查询途中新插入的行留给下一轮。
-    const parts = db.prepare(`
+    const parts = iterate(`
       SELECT * FROM (
         SELECT id, session_id, time_created,
           ${field('$.type')} AS type, ${field('$.tool')} AS name,
           ${field('$.callID')} AS call_id, ${field('$.state.time.start')} AS started
         FROM part WHERE rowid > ? AND rowid <= ? ORDER BY rowid
-      ) WHERE type = 'tool'`).iterate(st.partMaxRowid, partTop);
+      ) WHERE type = 'tool'`, st.partMaxRowid, partTop);
     for (const p of parts) {
       if (!p.name || typeof p.name !== 'string') continue;
       const ts = Number(p.started) || Number(p.time_created) || 0;
