@@ -571,9 +571,11 @@ async function loadSessions(day) {
       return;
     }
     const hh = (ts) => new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    // session_id 为 NULL 的行（如 Cursor 账户级计费）没有可钻取的会话：照常显示，但不挂指针与点击
+    const hasSid = (s) => s.session_id != null && s.session_id !== '';
     host.innerHTML = `<table>
       <thead><tr><th>时间段</th><th>工具</th><th>模型</th><th>项目</th><th class="num">tokens</th><th class="num">调用</th><th class="num">峰值上下文(估)</th></tr></thead>
-      <tbody>${sessions.map(s => `<tr class="sess-row" data-sid="${esc(s.session_id)}" data-tool="${esc(s.tool)}">
+      <tbody>${sessions.map(s => `<tr${hasSid(s) ? ` class="sess-row" data-sid="${esc(s.session_id)}" data-tool="${esc(s.tool)}"` : ''}>
         <td class="dim" style="font-variant-numeric:tabular-nums">${hh(s.first_ts)}–${hh(s.last_ts)}</td>
         <td><span class="badge ${esc(s.tool)}">${esc(TOOL_LABEL[s.tool] || s.tool)}</span></td>
         <td class="ellip" title="${esc((s.models || '').split(',').filter(Boolean).map(prettyModel).join(', '))}">${esc((s.models || '').split(',').filter(Boolean).map(prettyModel).slice(0, 2).join(', ')) || '-'}</td>
@@ -590,17 +592,27 @@ async function loadSessions(day) {
 }
 
 // 列表按 (tool, session_id) 分组：两个工具可能同名会话，钻取必须带上 tool 才不会合并
+let sessionDetailRequest = 0;
 async function showSessionDetail(sid, tool) {
+  const request = ++sessionDetailRequest;
+  const box = document.getElementById('sess-detail');
+  // 无事件或请求失败：收起并清空详情，不能让上一个会话的曲线冒充本行的数据
+  const hide = () => {
+    if (request !== sessionDetailRequest) return;
+    box.style.display = 'none'; charts.sess.clear();
+  };
   try {
     const res = await fetch(`/api/session/${encodeURIComponent(sid)}?tool=${encodeURIComponent(tool)}`);
+    if (request !== sessionDetailRequest) return;
+    if (!res.ok) { hide(); return; }
     const { events } = await res.json();
-    const box = document.getElementById('sess-detail');
-    if (!events?.length) return;
+    if (request !== sessionDetailRequest) return;
+    if (!events?.length) { hide(); return; }
     box.style.display = 'block';
     charts.sess.resize();
     charts.sess.setOption({
       animation: false,
-      title: { text: `${sid.slice(0, 18)}… · ${events.length} 次调用`, textStyle: { color: cssVar('--dim'), fontSize: 12 }, left: 4, top: 0 },
+      title: { text: `${TOOL_LABEL[tool] || tool} · ${sid.slice(0, 18)}… · ${events.length} 次调用`, textStyle: { color: cssVar('--dim'), fontSize: 12 }, left: 4, top: 0 },
       grid: { left: 70, right: 20, top: 30, bottom: 30 },
       // 这条线是 symbol:'none'，没有可命中的图元 → 必须 axis 触发，否则悬浮框永远不弹
       tooltip: chartTooltip('sess', {
@@ -620,7 +632,7 @@ async function showSessionDetail(sid, tool) {
         lineStyle: { color: isLight() ? '#30a14e' : '#39d353', width: 1.5 },
       }],
     }, true);
-  } catch { /* 静默 */ }
+  } catch { hide(); }
 }
 
 document.getElementById('sess-date').addEventListener('change', () => loadSessions());
