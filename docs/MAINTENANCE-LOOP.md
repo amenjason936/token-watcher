@@ -45,7 +45,7 @@
 
 在 npm 的 token-watcher 包设置中添加 GitHub Actions Trusted Publisher：owner=`luwill`、repository=`token-watcher`、workflow=`release.yml`、environment=`npm-release`，并允许直接 `npm publish`。GitHub 的该 environment 已要求 `luwill` 审核，且只接受 `main` 分支；允许维护者本人发起并审核发布。参见 [npm 官方可信发布者](https://docs.npmjs.com/trusted-publishers/)。
 
-2026-10-14 用户批准后已保存上述 Trusted Publisher，允许 `npm publish` 与 npm 必带的 `npm stage publish`，未授予独立 dist-tag 管理权限。npm 页面显示 `Pending validation`，要求在 2026-10-16 03:47 UTC（Asia/Taipei 11:47）前完成真实发布以验证配置。本次不新增产品版本，配置成功不能算作 OIDC 实际发布验证；超过页面期限或授权失效时须由维护者检查 npm 设置。
+2026-10-14 用户批准后已保存上述 Trusted Publisher，允许 `npm publish` 与 npm 必带的 `npm stage publish`，未授予独立 dist-tag 管理权限。随后按用户明确指令发布 1.9.3，[OIDC 发布运行](https://github.com/luwill/token-watcher/actions/runs/38509791735)全部成功，npm 页面状态已从 `Pending validation` 变为 `Valid`，首次验证完成。公开 registry 包与已审核产物逐字节一致；npm audit signatures 无 invalid/missing，provenance 绑定本仓库 release.yml、main 提交 370e6b6 与该运行。
 
 未配置或失效时 `verify` 和 `draft` 可正常工作；`publish` 会因身份校验失败而停止，不能将本机 npm token 复制到仓库绕过。Homebrew tap 更新在 registry 发布并校验后按现有流程办理。
 
@@ -55,4 +55,4 @@
 
 `node scripts/maintenance/scan.mjs --state-dir <本地状态目录>` 连续执行两次，第二次应无新增变化；`--dry-run` 仅输出，不更新状态。脚本只读 GitHub 元数据，不执行远端代码、创建评论、合并或发布，也不接触用量数据库。首次真实队列试运行只能算队列采集验收，不能冒充实际完成了 bug 修复或发版。
 
-2026-10-14 验收：[首次云端扫描](https://github.com/luwill/token-watcher/actions/runs/38505648089)得到 1 个 PR、2 个 Issue；[重复扫描](https://github.com/luwill/token-watcher/actions/runs/38507005427) changed=0、closed=0。补充草稿复用与附件核对后，本地 829 项完整回归通过，[main CI 的 10 个任务](https://github.com/luwill/token-watcher/actions/runs/38508200184)成功。[最终发布 verify 演练](https://github.com/luwill/token-watcher/actions/runs/38508226478)通过，1.9.2 universal 包与已公开的安装包逐字节一致（SHA-256=76ba2ed8528e5020082e75ff96e2e15215c8d9fa8175ec393c24dcff65579679）。Codex 每日 09:00 任务已启用，未执行新的正式发布。
+2026-10-14 验收：[首次云端扫描](https://github.com/luwill/token-watcher/actions/runs/38505648089)得到 1 个 PR、2 个 Issue；[重复扫描](https://github.com/luwill/token-watcher/actions/runs/38507005427) changed=0、closed=0。补充草稿复用与附件核对后，本地 829 项完整回归通过，[main CI 的 10 个任务](https://github.com/luwill/token-watcher/actions/runs/38508200184)成功。[最终发布 verify 演练](https://github.com/luwill/token-watcher/actions/runs/38508226478)通过，1.9.2 universal 包与已公开的安装包逐字节一致（SHA-256=76ba2ed8528e5020082e75ff96e2e15215c8d9fa8175ec393c24dcff65579679）。Codex 每日 09:00 任务已启用；该 verify 演练未执行正式发布，其后经维护者授权发布 1.9.3 并完成首次 OIDC 验证。

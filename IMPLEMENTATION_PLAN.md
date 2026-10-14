@@ -6,12 +6,12 @@
 
 1. [x] 核对 main、registry、发布环境与 npm/GitHub 官方文档；准备 1.9.3 版本、lockfile、更新日志和发布说明。
 2. [x] 829 项完整隔离回归通过；69 个包内文件与源码逐字节匹配，universal 为 arm64 + x86_64；干净安装版本和八个资源/API 端点通过。
-3. [ ] 提交推送版本，确认全部 main CI 后创建标签、检查 Release 草稿产物，再通过已授权的 GitHub 发布审核执行 OIDC 发布。
-4. [ ] 独立核对 registry/latest、公开 GitHub Release、产物及 provenance；确认 npm Publisher 已验证，同步 Homebrew 并记录结果。
+3. [x] 版本提交 370e6b6 与 v1.9.3 已推送，[main CI 38509273605](https://github.com/luwill/token-watcher/actions/runs/38509273605) 的 10 个任务全绿；本地/云端/草稿/正式发布包逐字节一致。[发布运行 38509791735](https://github.com/luwill/token-watcher/actions/runs/38509791735) 经本次用户授权的 npm-release 审核，全部任务成功。
+4. [x] npm version/latest=1.9.3，[GitHub Release](https://github.com/luwill/token-watcher/releases/tag/v1.9.3) 已公开为 latest；registry 包与候选字节、SHA-1/SHA-512 一致。npm audit signatures 无 invalid/missing，provenance 绑定 370e6b6、release.yml 和上述运行；npm 页面 Publisher 状态为 Valid。Homebrew [3fc696f](https://github.com/luwill/homebrew-tap/commit/3fc696f4f5b6a58fcef2f56a679402cc7cf26225) 已同步版本和 SHA-256，Ruby 语法通过。
 
 测试沿用此前授权的临时目录与合成数据库/清理范围。正式用量库、本机服务不进入本次发布操作。
 
-本地候选 SHA-256=8423ec28fc9ce04af1ca489da7dacb228149b22443bf15f3cd68cfd94b562ee5。云端发布前将独立下载并比较实际草稿产物，最终公开校验值以被审核并发布的云端 artifact 为准。
+最终发布包 SHA-256=8423ec28fc9ce04af1ca489da7dacb228149b22443bf15f3cd68cfd94b562ee5；本地候选、草稿附件、publish artifact 与公开 registry 包完全相同。首次 Trusted Publisher 验证完成，后续发版仍需要维护者明确授权。
 
 ## 2026-10-14 每日维护 Loop 与 CI/CD
 
@@ -22,7 +22,7 @@
 
 默认日程为每天 09:00（Asia/Taipei）；自动扫描、有限修复与草稿 PR，合并和正式发版由维护者确认。npm 发布采用 OIDC，不复制本机令牌到仓库；每次仍经人工审核。真实日志/数据库与本机服务不进入日常维护测试。
 
-GitHub `npm-release` 环境已设置：仅 `main` 分支、审查人 `luwill`，允许本人发起并审核。用户批准并完成身份验证后，npm Trusted Publisher 已成功保存；页面为 Pending validation，要求 2026-10-16 11:47（Asia/Taipei）前真实发布验证。本次未执行新的正式发布。验证记录与运行链接见 docs/MAINTENANCE-LOOP.md。
+GitHub `npm-release` 环境已设置：仅 `main` 分支、审查人 `luwill`，允许本人发起并审核。用户批准并完成身份验证后保存 npm Trusted Publisher；随后按用户指令真实发布 1.9.3，状态已变为 Valid。首次验证期限不再是待办；后续发版仍须另行授权。验证记录与运行链接见 docs/MAINTENANCE-LOOP.md。
 
 ## 2026-10-14 发布 Antigravity 与模型价格修复（1.9.2）
 
