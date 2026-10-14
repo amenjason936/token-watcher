@@ -136,7 +136,7 @@ export const SOURCES = [
             join(HOME, '.gemini', 'antigravity-ide', 'brain')],
     kind: 'jsonl',
     collector: 'antigravity',
-    version: 2, // v2: 权威/估算基线分离，修复混口径减法的 input 虚高（实时会话实测 4 倍），重扫补正
+    version: 3, // v3: 逐轮真实 usage（含缓存）；旧日志按完整上下文估算，重扫覆盖旧差分
     match: (name) => name.startsWith('transcript') && name.endsWith('.jsonl'),
     subscription: true,
   },

@@ -1,5 +1,29 @@
 # 修复 token 统计与官方口径的三处偏差
 
+## 2026-10-14 发布 Antigravity 与模型价格修复（1.9.2）
+
+用户已授权将本轮修复一起提交、推送 GitHub 并发布新版本。
+
+1. [x] 核对远端 main、GitHub/npm 版本和发布流程，确定补丁版本 1.9.2；整理公开修复与恢复说明。
+2. [x] 完成版本回归、macOS universal 构建、打包与干净安装验证；820 项回归、67 个包内文件与源码逐字节匹配、干净安装的 CLI/实数采集/Flash 与 Argon 计价及 8 个资源端点通过。
+3. [ ] 提交推送本轮修复，确认多平台 CI；准备标签、GitHub Release 和 npm 发布包。
+4. [ ] 发布并核对 GitHub、npm registry、安装包校验值和 Homebrew 更新结果。
+
+npm 预检：当前会话返回 E401，registry 发布需要账户持有者恢复登录并完成验证。测试沿用本轮已授权的隔离目录和清理范围。本机数据库备份、逐键对账及个人用量证据保留本地，不进入公开发行包。
+
+发布候选：token-watcher-1.9.2.tgz，SHA-256=76ba2ed8528e5020082e75ff96e2e15215c8d9fa8175ec393c24dcff65579679；菜单栏 universal 为 x86_64 + arm64。package-lock 与 package.json 统一为 1.9.2，公开恢复与价格说明包含在包内。
+
+## 2026-10-14 已完成的 Antigravity 与模型定价修复
+
+- [x] 按逐轮真实 usage 记录非缓存输入、缓存读和含思维输出；旧日志改用完整上下文估算，标明质量。
+- [x] 修复晚到 usage/metadata、重复/full 日志、ACTIVE/DONE 及仅更新已有记录时的面板通知；采集版本升至 v3。
+- [x] 按用户授权完成正式库一致备份与 Antigravity 历史回填；独立逐键、逐字段核对和重复扫描幂等通过，其他来源不受回填影响。
+- [x] 补齐 Argon 与 11 个原缺价名称的官方价/来源别名（含 2 个免费名称），保留未知路由名称的缺价提示。
+- [x] 修复缓存写价、优惠截止和 Cursor MAX/Grok Fast 模式；费用卡、按天图与 ROI 共用同一解析链路。
+- [x] 完整隔离回归 820 项通过；只读实库费用试算、在线 API 与实际 ECharts 悬浮明细一致，Antigravity 健康正常。
+
+公开说明：docs/ANTIGRAVITY-AUDIT-2026-10-14.md、docs/ANTIGRAVITY-RECOVERY-2026-10-14.md、docs/MODEL-PRICING-AUDIT-2026-10-14.md。
+
 ## 2026-10-10 合并 PR #2 并发布 1.8.4
 
 用户明确授权合并 PR #2、提交推送补充修复并发布新版本；沿用本轮已确认的隔离合成数据库测试与临时文件清理范围。

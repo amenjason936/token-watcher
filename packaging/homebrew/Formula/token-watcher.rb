@@ -8,8 +8,8 @@
 class TokenWatcher < Formula
   desc "Local real-time token usage & quota dashboard for AI coding agents"
   homepage "https://github.com/luwill/token-watcher"
-  url "https://registry.npmjs.org/token-watcher/-/token-watcher-1.9.1.tgz"
-  sha256 "003e56e3717f66a127cca0224d1a092b3f0d38126099929c3d23203c5c48bc9f" # update-formula.sh 回填
+  url "https://registry.npmjs.org/token-watcher/-/token-watcher-1.9.2.tgz"
+  sha256 "76ba2ed8528e5020082e75ff96e2e15215c8d9fa8175ec393c24dcff65579679" # update-formula.sh 回填
   license "MIT"
 
   depends_on "node"

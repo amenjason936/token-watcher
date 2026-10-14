@@ -5,26 +5,13 @@ import { readLinesFrom } from './lines.js';
 import { normalizeModel } from '../models.js';
 
 /**
- * Antigravity（IDE / antigravity-cli）采集器：估算口径，非逐请求实数。
- *
- * 本地没有任何一处落"逐请求 usage"——这是 2026-09 初次调研的结论，本次复核在
- * conversations/*.db 的 gen_metadata 里找到了部分实数（上下文窗口大小），据此采用
- * 与社区实测实现 TokenTracker（MIT）相同的估算法：
- *   - transcript：~/.gemini/antigravity{,-cli,-ide}/brain/<uuid>/.system_generated/logs/transcript.jsonl
- *     有完整对话流但无 usage，按 PLANNER_RESPONSE（每次 planner 调用）计费；
- *   - 输入 = 真实上下文增量：gen_metadata 的 protobuf（字段 1 → 9 → 10 → 1）带该轮的
- *     contextTokens（含系统提示与技能清单，transcript 里没有，按内容估会严重偏低），
- *     相邻两次 planner 的上下文差即新输入（防 O(N²) 重复计整段历史）；无 db 行时回落
- *     字符估算；换模型时基线清零（缓存冷，新会话基线）；
- *     权威与估算两条基线必须分开推进——两者差着系统提示与截断内容，混在同一次减法里
- *     会把"估算小于权威"钳成 0、把"权威减旧估算"放大成整段上下文（2026-09 实测主会话
- *     input 因此虚高 4 倍）；
- *   - 输出/思维链 = 字符估算（CJK×1 + 其他×¼），上游不落 token 数，这是本地可得的最优口径；
- *   - 模型：db 字段 19 > 用户切换消息 > variant 根目录 settings.json 默认值。
- *
- * db 行与 transcript 行几乎同时落盘，但存在晚到窗口：先按估算入账的事件记进
- * state.pending，后续任一轮扫描拿到权威 contextTokens 后原地 UPDATE 补正（dedup
- * 只防重插不更新，不补正就会把"第一眼的低估"钉死）。
+ * Antigravity（IDE / CLI）：新版 PLANNER_RESPONSE 的 input_tokens 不含 cache_read_tokens，
+ * output_tokens 已包含思维；total 按本项目口径包含缓存，thinking 只作诊断列不重复相加。
+ * 旧日志依次回落到 gen_metadata 的完整 contextTokens、完整 transcript 字符上下文；
+ * 缓存拆分未知，输出/思维按字符估算，usage_quality 明确区分两种估算与实数。
+ * 每次请求重新处理上下文，因此不能用相邻上下文差分冒充请求输入。
+ * metadata 晚到时补正该轮完整上下文，不依赖前后轮基线；pending 由 Scanner 持续重试。
+ * 常规/full/重放日志共用会话+step 键，高质量数据覆盖旧估算，估算不能覆盖实数。
  */
 
 /* ---------- 极简 protobuf 扫描（只需 varint 与 length-delimited 两类） ---------- */
@@ -192,16 +179,24 @@ export function sessionUuidOf(transcriptPath) {
 
 /* ---------- 采集主流程 ---------- */
 
+const tokenCount = (v) => Number.isSafeInteger(v) && v >= 0;
+/** 三项必须都有实数，避免把缺失/字符串/负数当 0；全零也是有效完成记录。 */
+export function antigravityUsage(r) {
+  if (![r.input_tokens, r.cache_read_tokens, r.output_tokens].every(tokenCount)) return null;
+  if (!Number.isSafeInteger(r.input_tokens + r.cache_read_tokens + r.output_tokens)) return null;
+  const reasoning = tokenCount(r.thinking_tokens) ? Math.min(r.thinking_tokens, r.output_tokens) : 0;
+  return { input_tokens: r.input_tokens, cached_input: r.cache_read_tokens,
+    output_tokens: r.output_tokens, reasoning_tokens: reasoning,
+    total_tokens: r.input_tokens + r.cache_read_tokens + r.output_tokens, usage_quality: 3 };
+}
+
 export async function collectAntigravityFile(store, { tool, path, fileId, offset, state, version }) {
-  let st = state ?? { ctx: 0, prevAuth: 0, prevEst: 0, model: null, lastPlannerModel: null, pending: [], seen: [] };
+  const st = state ?? { ctx: 0, model: null, pending: [], seen: [] };
   st._v = version;
   st.pending ??= [];
   st.seen ??= [];
-  st.prevAuth ??= 0;
-  st.prevEst ??= 0;
   let inserted = 0;
-  // 上游会把历史行重放/重写进 transcript（实测同一段 step 整块出现两遍）。重放行若照常
-  // 处理会双重 inflate 上下文、且差分出的 input=0 会经补正通道覆盖原计费——必须整体跳过。
+  // 重放只跳过上下文累加；晚到的完成记录仍能补上该 step 的真实 usage。
   const seen = new Set(st.seen);
 
   const root = variantRootOf(path);
@@ -218,23 +213,17 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
     } catch { /* 无 settings / 解析失败 */ }
   }
 
-  // 补正上一轮按估算入账的事件：权威 contextTokens 到位后原地 UPDATE。
-  // 语句统一：total 用库里的 output/reasoning 重算（SQLite 的 SET 右值取旧行列，
-  // 不会受同行 input 赋值影响）。
-  // 条目按 step 升序解析并链式推进权威基线：连续多个估算轮的增量各自归位，
-  // 不会都从同一个旧基线重复扣减。
+  // 按事件本身补正，不把旧轮减去更新轮的基线；Store 的质量优先级防止覆盖实数。
   if (st.pending.length && stepMap) {
-    let pm = null;
     for (let i = 0; i < st.pending.length; i++) {
       const p = st.pending[i];
       const info = stepMap.get(p.step);
-      if (!info || !(info.contextTokens > 0)) continue;
-      const m = info.model || null;
-      if (pm && m && m !== pm) st.prevAuth = 0; // 换模型：缓存冷，基线清零
-      const newInput = Math.max(0, info.contextTokens - st.prevAuth);
-      store.correctEventInput(p.key, newInput);
-      st.prevAuth = info.contextTokens;
-      pm = m;
+      if (!p.event || !(info?.contextTokens > 0)) continue;
+      store.upsertAntigravityEvent({ ...p.event,
+        model: normalizeAntigravityModel(info.model) ?? p.event.model,
+        input_tokens: info.contextTokens, total_tokens: info.contextTokens + p.event.output_tokens,
+        usage_quality: 2,
+      });
       st.pending.splice(i, 1); i--;
     }
   }
@@ -244,53 +233,36 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
     try { r = JSON.parse(line); } catch { return; }
     if (!r || typeof r !== 'object') return;
 
-    // 重放的历史行：跳过（step_index 单调递增，重复出现即重放）
+    // ACTIVE 不是最终数；不消耗去重键，后到的 DONE 必须能计入。
+    if (r.status === 'ACTIVE') return;
     const si = r.step_index;
+    const replay = seen.has(si);
     if (Number.isFinite(si)) {
-      if (seen.has(si)) return;
-      seen.add(si);
-      st.seen.push(si);
-      if (st.seen.length > 4000) st.seen = st.seen.slice(-2000); // 防 state 无界（超长会话截尾）
+      if (!replay) { seen.add(si); st.seen.push(si); }
     }
 
-    if (r.type === 'USER_INPUT' || r.type === 'USER_SETTINGS_CHANGE') {
+    if (!replay && (r.type === 'USER_INPUT' || r.type === 'USER_SETTINGS_CHANGE')) {
       st.model = parseModelSelection(r.content) ?? st.model;
     }
 
     if (r.type !== 'PLANNER_RESPONSE') {
-      st.ctx += estStep(r);
+      if (!replay) st.ctx += estStep(r);
       return;
     }
 
     const ts = Date.parse(r.created_at);
+    const usage = antigravityUsage(r);
+    if (replay && !usage) return;
     const info = stepMap?.get(r.step_index) ?? null;
     if (info?.model) st.model = normalizeAntigravityModel(info.model) ?? st.model;
-    st.ctx += estStep(r); // 先把本步自身产出计入历史（下一轮的上下文含本轮响应）
-    if (!Number.isFinite(ts)) return;
-
-    if (st.lastPlannerModel && st.model && st.model !== st.lastPlannerModel) {
-      st.prevAuth = 0; st.prevEst = 0; // 换模型：缓存冷，两条基线都按新会话重立
-    }
-
-    // 两条基线各自同口径相减：权威链（gen db 的 contextTokens，含系统提示）与
-    // 估算链（transcript 字符估算）差着一个系统量级，混减会产生 0 或整段上下文
-    let input, billedCtx, auth;
-    if (info?.contextTokens > 0) {
-      auth = true;
-      billedCtx = info.contextTokens;
-      input = Math.max(0, billedCtx - st.prevAuth);
-    } else {
-      auth = false;
-      billedCtx = st.ctx - estStep(r);
-      input = Math.max(0, billedCtx - st.prevEst);
-    }
-    const output = estValue(r.content) + estValue(r.tool_calls);
+    const input = info?.contextTokens > 0 ? info.contextTokens : st.ctx;
+    if (!replay) st.ctx += estStep(r); // 本步输出进入下一轮的完整历史上下文
+    if (!Number.isFinite(ts) || !Number.isSafeInteger(si) || si < 0) return;
     const reasoning = estValue(r.thinking);
-    const total = input + output + reasoning;
-    if (total <= 0) return;
+    const output = estValue(r.content) + estValue(r.tool_calls) + reasoning;
 
     const key = `antigravity:${sid}:${r.step_index}`;
-    const n = store.insertEvent({
+    const event = {
       ts,
       tool,
       model: st.model ? normalizeModel(st.model) : null,
@@ -301,21 +273,18 @@ export async function collectAntigravityFile(store, { tool, path, fileId, offset
       cache_write: 0,
       output_tokens: output,
       reasoning_tokens: reasoning,
-      total_tokens: total,
+      total_tokens: input + output,
       dedup_key: key,
-    });
+      usage_quality: info?.contextTokens > 0 ? 2 : 1,
+      ...usage,
+    };
+    const n = store.upsertAntigravityEvent(event);
     inserted += n;
-    // 全量重放（版本升级触发）时 dedup 命中旧行：若本次拿到权威 db 值，就地把旧估算补正。
-    // 扫描器的写入代理恒返回 0，此时对新插入的行也会补一次——写入值与插入值相同，幂等。
-    if (n === 0 && info) store.correctEventInput(key, input);
-    if (auth) {
-      st.prevAuth = billedCtx;
-    } else {
-      st.prevEst = billedCtx;
-      // 无权威 db 行的入账留待补正（有 50 条上限，防 state 无界增长）
-      if (st.pending.length < 50 && input > 0) st.pending.push({ key, step: r.step_index });
+    if (usage || info?.contextTokens > 0) {
+      st.pending = st.pending.filter(p => p.step !== si);
+    } else if (!st.pending.some(p => p.step === si)) {
+      st.pending.push({ step: si, event });
     }
-    st.lastPlannerModel = st.model;
   });
 
   return { newOffset, inserted, state: st };

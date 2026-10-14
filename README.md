@@ -63,7 +63,7 @@ spend so you can see when the estimate drifts.
 | Grok Build | `~/.grok/sessions` | Per-turn usage (incl. vendor cost scale), tool calls |
 | Pi | `~/.pi/agent/sessions` | Per-request details, tool calls |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Per-request details, tool calls |
-| Antigravity ≈ | `~/.gemini/antigravity*/brain/**/transcript.jsonl` | Per planner turn — input from authoritative db context deltas, output estimated from content |
+| Antigravity ≈ | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | Real per-step input/cache/output when available; full-context and character estimates for older logs |
 | Kimi Code | `~/.kimi-code/sessions/**/wire.jsonl` | Per-turn details (3 usage shapes auto-detected) |
 | Qoder | `~/.qoder{,-cn}/projects/**` | **Credits ledger** (upstream reports credits, not tokens, locally) |
 | Cursor | Account-level usage CSV | Per-request details — Cursor stores nothing per-request locally, so this polls the official export with local credentials |
@@ -75,6 +75,11 @@ Not supported: web chats (ChatGPT etc.) — token counts live server-side, nothi
 > Qoder currently reports credits but zero tokens locally — credits go to a
 > dedicated ledger shown as a "credits spent" card, never fabricated into
 > tokens. Estimated sources are labeled (≈).
+> Antigravity CLI 1.3.4 writes per-step input (excluding cache), cache reads,
+> and output (including thinking). Older logs use full-context/character estimates;
+> `usage_quality` distinguishes real usage (3), context estimates (2), and character
+> estimates (1). Real usage overrides old estimates, including on history rescans.
+> These tokens and API-equivalent costs are separate from Google's account quotas.
 
 ## Quick start
 
@@ -154,7 +159,7 @@ your own data dir.
 - **Session drill-down**: click any day → sessions (peak-context estimate) → per-request token curve
 - **Quotas**: Codex official (direct-read), Claude official (local OAuth token → official usage endpoint; falls back to 5h window estimation)
 - **Subscription ROI**: this month's API-equivalent cost vs what you actually pay (configure prices in `~/.tokenmeter/subscriptions.json`; `token-watcher roi`)
-- **Balances & costs**: DeepSeek/Kimi balance polling; LiteLLM pricing with per-model CNY conversion; **balance reconciliation**; Qoder credits ledger
+- **Balances & costs**: DeepSeek/Kimi balance polling; user prices → verified official prices and source-specific aliases → LiteLLM fallback, with CNY conversion; **balance reconciliation**; Qoder credits ledger
 - **Community leaderboard** (opt-in, off by default): see how your daily/weekly/30-day totals stack up against other users — aggregate numbers only, never your raw events. `token-watcher leaderboard on <name>`
 - **Health self-check**: parse errors turn red, "file being written but no new events" turns yellow — silent format drift gets caught
 - **Exports & backups**: CSV, session/annual CLI reports, daily `VACUUM INTO` snapshots (7 kept)

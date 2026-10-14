@@ -595,7 +595,7 @@ let ATY_GOLD = 0, ATY_FINAL = 0, ATY_U3_ESTIN = 0; // antigravity 黄金数字�
 
   const A1_TC = JSON.stringify([{ tool: 'run_command', args: { cmd: 'a'.repeat(150) } }]);
   const A3_C = 'b'.repeat(100), A3_TH = 'c'.repeat(40), A2_C = 'a'.repeat(400);
-  // u1：db 权威 → 事件1 input=23986；事件2 input=25713-23986=1727
+  // u1：逐请求完整上下文 → input=23986 / 25713，不能按增长量差分
   w(join(HOME, '.gemini/antigravity-cli/brain/u1-anty/.system_generated/logs/transcript.jsonl'), [
     JSON.stringify({ step_index: 0, type: 'USER_INPUT', created_at: ISO(60000), content: 'hello antigravity' }),
     JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', created_at: ISO(58000), content: '', tool_calls: JSON.parse(A1_TC), thinking: '' }),
@@ -613,9 +613,7 @@ let ATY_GOLD = 0, ATY_FINAL = 0, ATY_U3_ESTIN = 0; // antigravity 黄金数字�
   ]);
   writeFileSync(join(HOME, '.gemini/antigravity/brain/u2-anty/.system_generated/logs/other.jsonl'), '{}');
   const ATY_EST_U2 = est('d'.repeat(100)) + est('e'.repeat(80));
-  // u3：权威→估算→权威三明治。中间轮无 db 行按估算链计费；后一个权威轮必须回到
-  // 权威链差分（12000-10000=2000），绝不能拿权威值减上一轮的估算值（混口径曾把
-  // 实时会话 input 虚高 4 倍：负差钳 0 或整段上下文全额入账）
+  // u3：上下文→字符→上下文三明治，每轮都计完整输入，不能把两种估算口径相减
   const A_U3_IN = 'x'.repeat(200);
   const A_U3_TC = JSON.stringify([{ tool: 't', args: { c: 'y'.repeat(100) } }]);
   const A_U3_G2 = 'z'.repeat(300), A_U3_P3 = 'w'.repeat(50), A_U3_P5 = 'q'.repeat(20);
@@ -633,8 +631,8 @@ let ATY_GOLD = 0, ATY_FINAL = 0, ATY_U3_ESTIN = 0; // antigravity 黄金数字�
     genRow({ model: 'gemini-3.8-flash', contextTokens: 10000, lastStepIndex: 0 }),
     genRow({ model: 'gemini-3.8-flash', contextTokens: 12000, lastStepIndex: 4 }), // step5 没有 gen 行
   ]);
-  const ATY_U3 = (10000 + est(A_U3_TC)) + (ATY_U3_ESTIN_V + est(A_U3_P3)) + (2000 + est(A_U3_P5));
-  ATY_GOLD = 23986 + 1727 + est(A1_TC) + est(A3_C) + est(A3_TH) + ATY_EST_U2 + ATY_U3;
+  const ATY_U3 = (10000 + est(A_U3_TC)) + (ATY_U3_ESTIN_V + est(A_U3_P3)) + (12000 + est(A_U3_P5));
+  ATY_GOLD = 23986 + 25713 + est(A1_TC) + est(A3_C) + est(A3_TH) + ATY_EST_U2 + ATY_U3;
   ATY_FINAL = ATY_GOLD - est('d'.repeat(100)) + 5000; // u2 补正后（见下方补正用例）
 
   // Kimi Code：workspaces.json（wd 目录 → 项目名）+ wire.jsonl（config.update 模型 +
@@ -826,15 +824,15 @@ const cli = (args) => spawnSync(process.execPath, ['--disable-warning=Experiment
   const atyEv = q("SELECT dedup_key, input_tokens, output_tokens, model FROM events WHERE tool='antigravity' ORDER BY ts");
   ok(`antigravity 总量 ${ATY_GOLD}`, byTool.antigravity?.t === ATY_GOLD, `${byTool.antigravity?.t} vs ${ATY_GOLD}`);
   ok('antigravity 6 事件（u1 两权威 + u2 估算 + u3 三明治）', byTool.antigravity?.n === 6, JSON.stringify(byTool.antigravity));
-  ok('antigravity 权威输入 23986 / 1727（上下文差分）',
-    atyEv[0]?.input_tokens === 23986 && atyEv[1]?.input_tokens === 1727, JSON.stringify(atyEv));
+  ok('antigravity 完整上下文输入 23986 / 25713（不做差分）',
+    atyEv[0]?.input_tokens === 23986 && atyEv[1]?.input_tokens === 25713, JSON.stringify(atyEv));
   ok('antigravity 模型名归一（Gemini 3.8 Flash (Medium) → gemini-3.8-flash）',
     atyEv[0]?.model === 'gemini-3.8-flash' && atyEv[1]?.model === 'gemini-3.8-flash',
     JSON.stringify(atyEv.map(e => e.model)));
   ok('antigravity 无模型信息的事件如实留空（u2 走估算路径）',
     atyEv[2]?.model === null, JSON.stringify(atyEv[2]));
-  ok('antigravity 权威/估算基线不混用：三明治中间轮走估算链，后一权威轮回到权威差分 2000',
-    atyEv[3]?.input_tokens === 10000 && atyEv[4]?.input_tokens === ATY_U3_ESTIN && atyEv[5]?.input_tokens === 2000,
+  ok('antigravity 每轮完整输入：中间轮字符估算，后一上下文轮完整计 12000',
+    atyEv[3]?.input_tokens === 10000 && atyEv[4]?.input_tokens === ATY_U3_ESTIN && atyEv[5]?.input_tokens === 12000,
     JSON.stringify(atyEv.slice(3).map(e => e.input_tokens)));
   ok('antigravity 非 transcript 的 jsonl 不入文件行',
     q("SELECT COUNT(*) n FROM files WHERE tool='antigravity'")[0]?.n === 3);
@@ -921,7 +919,7 @@ const cli = (args) => spawnSync(process.execPath, ['--disable-warning=Experiment
   ok('估算事件被权威上下文原地补正（25 → 5000）',
     u2row?.input_tokens === 5000 && u2row?.total_tokens === 5000 + 20,
     JSON.stringify(u2row));
-  ok('补正不改动输出与模型',
+  ok('补正保留原输出',
     db.prepare("SELECT output_tokens o FROM events WHERE dedup_key = 'antigravity:anty-u2-anty:1'").get()?.o === 20);
   const atyTotal = db.prepare("SELECT SUM(total_tokens) t FROM events WHERE tool='antigravity'").get().t;
   ok(`antigravity 补正后总量 ${ATY_FINAL}`, atyTotal === ATY_FINAL, `${atyTotal} vs ${ATY_FINAL}`);
@@ -2052,6 +2050,9 @@ await (await import('./server-lifecycle.mjs')).testServerLifecycle(ok);
 await (await import('./prune-roots.mjs')).testPruneRoots(ok);
 await (await import('./codex-key-archive.mjs')).testCodexKeyArchive(ok);
 await (await import('./session-drilldown.mjs')).testSessionDrilldown(ok);
+await (await import('./antigravity-usage.mjs')).testAntigravityUsage(ok);
+await (await import('./argon-pricing.mjs')).testArgonPricing(ok);
+await (await import('./official-pricing.mjs')).testOfficialPricing(ok);
 
 /* ---------- 清理 ---------- */
 rmSync(HOME, { recursive: true, force: true });

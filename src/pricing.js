@@ -4,6 +4,7 @@ import { DATA_DIR, SOURCES } from './config.js';
 import { ensurePrices, lookupPrice } from './litellm.js';
 import { ensureFxRate } from './fx.js';
 import { localDayStart, localRangeStart } from './timeRange.js';
+import { officialPrice, pricingModel, LONG_CONTEXT_SQL } from './officialPricing.js';
 
 /**
  * ccmr 费用折算：单价表 ~/.tokenmeter/pricing.json（用户可编辑覆盖）。
@@ -65,42 +66,48 @@ function toCny(amount, currency, rate) {
 
 /**
  * 全源费用折算（9 源）：
- * 单价解析优先级 = 用户 pricing.json（可含人民币直价）> LiteLLM 实时牌价（USD×汇率）。
+ * 单价解析优先级 = 用户 pricing.json > 已核实的官方现价 > LiteLLM 实时牌价（USD×汇率）。
  * ccmr 为按量实付；claude-code/codex/zcode/grok-build 等订阅制工具为 "API 等值成本"（假设性），
  * 前端需分开标注。窗口：0=全部。
  */
-function priceOf(model, table, rate) {
-  const local = table[model];
+function priceOf(model, table, rate, now = Date.now(), tool, longContext = false) {
+  const canonical = pricingModel(model, tool);
+  const official = officialPrice(model, { tool, now, longContext });
+  const custom = table[model] ?? table[canonical];
+  const local = custom ?? official;
   // 谷时折扣是厂商的计费规则，不是单价。老用户的 pricing.json 里没有 off_peak 字段，
   // 若实现成"缺失即不打折"，峰谷价对他们就是个静默空操作，故缺失时回落种子表。
-  const offPeak = local?.off_peak ?? SEED.models[model]?.off_peak ?? 1;
+  const offPeak = local?.off_peak ?? SEED.models[canonical]?.off_peak ?? 1;
   if (local) {
     return {
       inCny: local.currency === 'USD' ? local.input_miss * rate : local.input_miss,
       cacheCny: local.currency === 'USD' ? local.input_hit * rate : local.input_hit,
       outCny: local.currency === 'USD' ? local.output * rate : local.output,
-      cacheWCny: 0,
+      // 老价格文件只写三项时，用已核实的官方默认 5min 写缓存价格补第四项。
+      cacheWCny: local.input_write != null ? toCny(local.input_write, local.currency, rate)
+        : official ? toCny(official.input_write, official.currency, rate) : 0,
       offPeak,
     };
   }
-  const p = lookupPrice(model);
+  const p = lookupPrice(model) ?? lookupPrice(canonical);
   if (!p) return null;
   return { inCny: p.input * rate, cacheCny: p.cacheRead * rate, outCny: p.output * rate, cacheWCny: p.cacheWrite * rate, offPeak };
 }
 
 /** 窗口费用聚合（供费用卡与订阅 ROI 共用：同一 priceOf 链路与峰谷判定） */
-export function aggregateCosts(db, since, { rate = 7.2, table = {} } = {}) {
+export function aggregateCosts(db, since, { rate = 7.2, table = {}, now = Date.now() } = {}) {
   const rows = db.prepare(`
-    SELECT tool, model, ${PEAK_SQL} AS peak, SUM(input_tokens) fi, SUM(cached_input) ci,
+    SELECT tool, model, ${PEAK_SQL} AS peak, ${LONG_CONTEXT_SQL} AS long_context,
+           SUM(input_tokens) fi, SUM(cached_input) ci,
            SUM(cache_write) cw, SUM(output_tokens) oi
-    FROM events WHERE ts >= ? GROUP BY tool, model, peak`).all(since);
+    FROM events WHERE ts >= ? GROUP BY tool, model, peak, long_context`).all(since);
   const byModel = new Map(), byTool = new Map(), byToolModel = new Map(), unpriced = new Set();
   const unpricedByToolModel = []; // ROI 要区分"没用量"和"有用量但无牌价"，后者不能折成 0 元
   let total = 0;
   for (const r of rows) {
-    const tokens = (r.fi || 0) + (r.ci || 0) + (r.oi || 0);
+    const tokens = (r.fi || 0) + (r.ci || 0) + (r.cw || 0) + (r.oi || 0);
     if (tokens <= 0) continue;
-    const p = priceOf(r.model, table, rate);
+    const p = priceOf(r.model, table, rate, now, r.tool, !!r.long_context);
     if (!p) {
       unpriced.add(r.model);
       unpricedByToolModel.push({ tool: r.tool, model: r.model, tokens });
@@ -137,7 +144,7 @@ export async function computeCosts(db, days = 30, { now = Date.now() } = {}) {
   const rate = fx.rate;
   const table = pricing.models || {};
   await Promise.race([ensurePrices().catch(() => {}), new Promise(r => setTimeout(r, 1500))]);
-  const agg = (since) => aggregateCosts(db, since, { rate, table });
+  const agg = (since) => aggregateCosts(db, since, { rate, table, now });
 
   const all = agg(0);
   const today = agg(localDayStart(now));
@@ -146,12 +153,13 @@ export async function computeCosts(db, days = 30, { now = Date.now() } = {}) {
   // 按天 × 模型成本（供"按天花费"堆叠柱形图）
   const rangeStart = localRangeStart(days, now);
   const dayRows = db.prepare(`
-    SELECT date(ts/1000, 'unixepoch', 'localtime') d, model, ${PEAK_SQL} AS peak,
+    SELECT date(ts/1000, 'unixepoch', 'localtime') d, tool, model, ${PEAK_SQL} AS peak,
+           ${LONG_CONTEXT_SQL} AS long_context,
            SUM(input_tokens) fi, SUM(cached_input) ci, SUM(cache_write) cw, SUM(output_tokens) oi
-    FROM events WHERE ts >= ? GROUP BY d, model, peak ORDER BY d`).all(rangeStart);
+    FROM events WHERE ts >= ? GROUP BY d, tool, model, peak, long_context ORDER BY d`).all(rangeStart);
   const byDayMap = new Map();
   for (const r of dayRows) {
-    const p = priceOf(r.model, table, rate);
+    const p = priceOf(r.model, table, rate, now, r.tool, !!r.long_context);
     if (!p) continue;
     const c = ((r.fi / 1e6) * p.inCny + (r.ci / 1e6) * p.cacheCny
       + (r.cw / 1e6) * p.cacheWCny + (r.oi / 1e6) * p.outCny) * (r.peak ? 1 : p.offPeak);
@@ -200,14 +208,16 @@ export function computeRecon(db, store, pricing, { hours = 24, rate = 7.2 } = {}
       if (!tools.length) { out.push({ provider: b.provider, id: b.id, balance: b.balance, delta, spend: null, hours }); continue; }
       const ph = tools.map(() => '?').join(',');
       for (const m of db.prepare(`
-        SELECT model, ${PEAK_SQL} AS peak, SUM(input_tokens) fi, SUM(cached_input) ci, SUM(output_tokens) oi
-        FROM events WHERE tool IN (${ph}) AND ts >= ? GROUP BY model, peak`).all(...tools, since)) {
+        SELECT tool, model, ${PEAK_SQL} AS peak, ${LONG_CONTEXT_SQL} AS long_context,
+               SUM(input_tokens) fi, SUM(cached_input) ci, SUM(cache_write) cw, SUM(output_tokens) oi
+        FROM events WHERE tool IN (${ph}) AND ts >= ? GROUP BY tool, model, peak, long_context`).all(...tools, since)) {
         // 必须连字符：OpenRouter 形态的 'deepseek/deepseek-v4-flash-0731' 扣的是
         // OpenRouter 的钱包，不是 DeepSeek 直连账户，裸前缀会把它误并进来
         if (!(m.model === prefix || m.model?.startsWith(prefix + '-'))) continue;
-        const p = priceOf(m.model, table, rate);
+        const p = priceOf(m.model, table, rate, Date.now(), m.tool, !!m.long_context);
         if (!p) continue;
-        spend += ((m.fi / 1e6) * p.inCny + (m.ci / 1e6) * p.cacheCny + (m.oi / 1e6) * p.outCny)
+        spend += ((m.fi / 1e6) * p.inCny + (m.ci / 1e6) * p.cacheCny
+          + (m.cw / 1e6) * p.cacheWCny + (m.oi / 1e6) * p.outCny)
           * (m.peak ? 1 : p.offPeak);
       }
     }
