@@ -34,10 +34,10 @@ dashboard updates in **under a second** while your agents work. Everything is
 stored as **per-request events**, not pre-aggregated buckets — so you can
 drill from a day, to a session, to a single request's token curve.
 
-It also refuses to lie to you: estimated sources are labeled as such
-(Antigravity ≈), models without pricing show up as *unpriced* instead of a
-made-up cost, and vendor balances are **reconciled** against locally computed
-spend so you can see when the estimate drifts.
+Measurement limits are documented: Antigravity reads real token usage when
+available and estimates older logs. Models without pricing show up as *unpriced*,
+and vendor balances are **reconciled** against locally computed spend so you
+can see when the estimate drifts.
 
 | | Token Watcher | TokenTracker | ccusage | Tokscale |
 |---|---|---|---|---|
@@ -63,7 +63,7 @@ spend so you can see when the estimate drifts.
 | Grok Build | `~/.grok/sessions` | Per-turn usage (incl. vendor cost scale), tool calls |
 | Pi | `~/.pi/agent/sessions` | Per-request details, tool calls |
 | OpenCode | `~/.local/share/opencode/opencode.db` | Per-request details, tool calls |
-| Antigravity ≈ | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | Real per-step input/cache/output when available; full-context and character estimates for older logs |
+| Antigravity | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | Real per-step input/cache/output when available; full-context and character estimates for older logs |
 | Kimi Code | `~/.kimi-code/sessions/**/wire.jsonl` | Per-turn details (3 usage shapes auto-detected) |
 | Qoder | `~/.qoder{,-cn}/projects/**` | **Credits ledger** (upstream reports credits, not tokens, locally) |
 | Cursor | Account-level usage CSV | Per-request details — Cursor stores nothing per-request locally, so this polls the official export with local credentials |
@@ -76,7 +76,7 @@ Not supported: per-request token collection for web chat apps (ChatGPT etc.). No
 > verified on real local data against an independent recomputation, row by row.
 > Qoder currently reports credits but zero tokens locally — credits go to a
 > dedicated ledger shown as a "credits spent" card, never fabricated into
-> tokens. Estimated sources are labeled (≈).
+> tokens. Antigravity's footer source tooltip explains the measurement limits.
 > Antigravity CLI 1.3.4 writes per-step input (excluding cache), cache reads,
 > and output (including thinking). Older logs use full-context/character estimates;
 > `usage_quality` distinguishes real usage (3), context estimates (2), and character

@@ -133,7 +133,7 @@ export const SOURCES = [
   },
   {
     tool: 'antigravity',
-    label: 'Antigravity ≈',
+    label: 'Antigravity',
     // IDE / cli /（历史）ide 三个 variant 的 brain 目录都可能有会话；只收 transcript*.jsonl
     roots: [join(HOME, '.gemini', 'antigravity', 'brain'),
             join(HOME, '.gemini', 'antigravity-cli', 'brain'),

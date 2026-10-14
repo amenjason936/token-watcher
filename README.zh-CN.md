@@ -21,7 +21,7 @@
 | Grok Build | `~/.grok/sessions` | 轮次用量明细（含厂商侧成本刻度）、工具调用 |
 | Pi | `~/.pi/agent/sessions` | 逐请求明细、工具调用（会话 JSONL 自带 USD 成本明细） |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 逐请求明细（message 表）、工具调用 |
-| Antigravity ≈ | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | 新版逐轮真实输入/缓存/输出；旧日志按完整上下文和字符估算 |
+| Antigravity | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | 新版逐轮真实输入/缓存/输出；旧日志按完整上下文和字符估算 |
 | Kimi Code | `~/.kimi-code/sessions/**/wire.jsonl` | 逐轮明细（step.end 用量，camelCase/Anthropic/OpenAI 兼容三形状自适应） |
 | Qoder | `~/.qoder{,-cn}/projects/**/*.jsonl` | **积分账本**（上游本地不报 token，只报 credits）；若上游恢复上报 token 则自动入事件 |
 | Cursor | 账号级用量账单（CSV） | 逐请求明细（缓存三段分项）——本地无逐请求数据，用本地凭证拉官方导出 |
@@ -42,7 +42,7 @@
 > 再回落到完整 transcript 字符上下文；输出/思维按 CJK×1 + 其他×¼ 估算。每轮都处理其上下文，
 > 不再用相邻上下文增长量代替输入。库内 usage_quality=3 为实数、2 为上下文估算、1 为字符估算。
 > 常规/full 日志去重，实数可覆盖旧估算，晚到 metadata 即使 transcript 不变也会重试。
-> 因仍有旧日志估算，界面保留「≈」；这里的 token 和 API 等价费用不代表 Google 官方剩余额度或账单。
+> 工具名统一显示 Antigravity，页面底部的数据源悬浮说明保留新旧日志的计量口径；这里的 token 和 API 等价费用不代表 Google 官方剩余额度或账单。
 
 ## 快速开始
 
@@ -275,6 +275,13 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 - i18n / 英文 README
 
 ## 更新日志
+
+### 1.9.5（2026-10-14）
+
+- **Antigravity 名称显示**：移除固定的「≈」，底部数据源悬浮说明解释新版真实用量与旧日志估算；统计口径保持不变。
+- **OpenCode 大库扫描**：仅取所需 JSON 字段并逐行读取，避免完整工具输出占满 JS 堆；保持 SQLite 语句存活，修复 Node 22.13 下 GC 导致的扫描失败（[#15](https://github.com/luwill/token-watcher/pull/15)）。
+- **会话详情显示**：失败或空数据清除旧图；迟到响应和同 ID 重试不会覆盖最新选择。无会话 ID 的行不再可点击，标题加入工具名（[#14](https://github.com/luwill/token-watcher/pull/14)）。
+- Node 22.13/24 回归、强制 GC、48 MiB 堆大库扫描及请求乱序测试通过；详见 [1.9.5 说明](docs/RELEASE-1.9.5.md)。
 
 ### 1.9.4（2026-10-14）
 

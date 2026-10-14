@@ -16,7 +16,7 @@ export const TOOL_LABEL = {
   'claude-code': 'Claude Code', 'ccmr': 'ccmr', 'codex': 'Codex',
   'zcode': 'ZCode', 'dsh': 'dsh', 'workbuddy': 'WorkBuddy', 'grok': 'Grok',
   'pi': 'Pi', 'opencode': 'OpenCode',
-  'antigravity': 'Antigravity ≈', 'kimi': 'Kimi Code', 'qoder': 'Qoder', 'cursor': 'Cursor',
+  'antigravity': 'Antigravity', 'kimi': 'Kimi Code', 'qoder': 'Qoder', 'cursor': 'Cursor',
 };
 
 // 深色底 #14141c 上经 validate_palette.js 校验的 8 槽分类色板：
