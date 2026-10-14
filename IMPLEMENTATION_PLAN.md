@@ -6,10 +6,12 @@
 
 1. [x] 核对 main、GitHub/npm 当前为 1.9.3，1.9.4 未占用；准备版本、lockfile、更新日志与发布说明。
 2. [x] 独立候选快照 863 项完整隔离回归通过，73 个包内文件与候选逐字节一致；universal 为 arm64/x86_64。干净安装版本为 1.9.4，合成 Cowork 两次扫描保持 2 事件/500 tokens，八个资源/API 端点及数据库对账通过。
-3. [ ] 提交推送目标修复，确认 macOS/Linux/Windows CI；创建 v1.9.4 标签和 Release 草稿。
-4. [ ] 审核本次固定产物并通过 OIDC 发布，核对 registry/GitHub/provenance 和 Homebrew。
+3. [x] 修复提交 a68bb17 与 v1.9.4 已推送；[CI 38525155965](https://github.com/luwill/token-watcher/actions/runs/38525155965) 的 10 个任务全绿。[草稿运行 38525439731](https://github.com/luwill/token-watcher/actions/runs/38525439731) 验证成功，云端/本地安装包及校验文件逐字节相同。
+4. [x] [发布运行 38525940019](https://github.com/luwill/token-watcher/actions/runs/38525940019) 经本轮授权的 npm-release 审核，4 个任务成功；npm version/latest=1.9.4，[GitHub Release](https://github.com/luwill/token-watcher/releases/tag/v1.9.4) 已公开为 latest。registry 与审核产物逐字节相同，SHA-1/SHA-512、GitHub asset digest 和 SLSA provenance（a68bb17/main/release.yml/本运行）均核对通过，npm audit signatures 无 invalid/missing。Homebrew [公式提交 2594247](https://github.com/luwill/homebrew-tap/commit/2594247f7feb841af0067fd75b64173272a5a3fb) 已同步，Ruby 语法通过。
 
 正式用量库与本机全局安装/服务不进入发布步骤；本次不会自行回填或重启。
+
+最终安装包 SHA-256=4ecb4f363a26d80c9db536c8b4f5eea20dd7457ae281a87d28873fb69f98d292；本地候选、草稿、待审正式运行与 registry 包完全一致。73 个包内文件、30 项定向测试、863 项完整隔离回归及干净安装验证完成。
 
 ## 2026-10-14 修复已确认的 Cowork 漏采与 Windows 路径
 
