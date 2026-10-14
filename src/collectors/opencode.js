@@ -33,17 +33,31 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
   try {
     const sessDir = db.prepare('SELECT directory FROM session WHERE id = ?');
 
+    // Node 22.13 的 iterator 只保留语句的原生指针，GC 可在读完前释放临时语句。
+    // 让 iterator 持有 JS 强引用，message / part 两种查询都保持逐行读取。
+    const iterate = (sql, ...params) => {
+      const statement = db.prepare(sql);
+      const rows = statement.iterate(...params);
+      Object.defineProperty(rows, 'statementRef', { value: statement });
+      return rows;
+    };
+
+    /**
+     * data 列只在 SQLite 里取字段，不整列读进 JS：part.data 里是完整的工具输出（读到的文件、
+     * 命令输出），首次全量扫描时整表 .all() 会把几个 GB 的字符串一次性搬进堆里，
+     * 直接 OOM（StatementSync.All → ColumnToValue）。坏 JSON 交给 json_valid 挡掉：
+     * json_extract 遇到坏行会让整条查询报错，而旧逻辑只是跳过那一行。
+     */
+    const field = (path) => `CASE WHEN json_valid(data) THEN json_extract(data, '${path}') END`;
+
     /**
      * rowid 水位在**会删行**的表上不够：OpenCode 的 part 随 message ON DELETE CASCADE，
      * session 还带 revert——删掉最大 rowid 后 SQLite 会把该号让给下一条插入，
      * 新消息的 rowid 就可能不大于水位，于是被静默跳过（不报错、只是永远少一条）。
      * 表变短就是删过行的信号：把水位退回 0 整表重读，dedup 保证重读是幂等的。
      */
-    const rewindIfShrunk = (table, watermark) => {
-      const max = db.prepare(`SELECT MAX(rowid) AS m FROM "${table}"`).get()?.m ?? 0;
-      return max < watermark ? 0 : watermark;
-    };
-    st.partMaxRowid = rewindIfShrunk('part', st.partMaxRowid);
+    const partTop = db.prepare('SELECT MAX(rowid) AS m FROM part').get()?.m ?? 0;
+    if (partTop < st.partMaxRowid) st.partMaxRowid = 0;
 
     /**
      * message 不能按 rowid 增量：assistant 消息是"先插后改"——开始生成就插入一行（tokens 全 0），
@@ -52,25 +66,28 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
      * 完成后的 UPDATE 再也读不到（实测 1.18.31 下漏掉八成消息）。按 time_updated 增量，
      * 被改过的行会重新进入视野；也顺带免疫了 rowid 复用问题。
      */
-    const msgs = db.prepare(`
-      SELECT id, session_id, time_created, time_updated, data
-      FROM message WHERE time_updated > ? ORDER BY time_updated`)
-      .all(Math.max(0, st.msgUpdatedAt - UPDATED_LOOKBACK_MS));
+    const msgs = iterate(`
+      SELECT id, session_id, time_created, time_updated,
+        ${field('$.role')} AS role, ${field('$.modelID')} AS model_id,
+        ${field('$.time.created')} AS created,
+        CASE WHEN json_valid(data) THEN json_type(data, '$.tokens') END AS tokens_type,
+        ${field('$.tokens.input')} AS t_input, ${field('$.tokens.output')} AS t_output,
+        ${field('$.tokens.reasoning')} AS t_reasoning,
+        ${field('$.tokens.cache.read')} AS t_cache_read, ${field('$.tokens.cache.write')} AS t_cache_write
+      FROM message WHERE time_updated > ? ORDER BY time_updated`,
+      Math.max(0, st.msgUpdatedAt - UPDATED_LOOKBACK_MS));
     for (const m of msgs) {
       st.msgUpdatedAt = Math.max(st.msgUpdatedAt, Number(m.time_updated) || 0);
-      let d;
-      try { d = JSON.parse(m.data); } catch { continue; }
       // user 消息没有 tokens：跳过，不能记成 0 用量的事件
-      const t = d?.tokens;
-      if (!t || d.role !== 'assistant') continue;
+      if (m.tokens_type !== 'object' || m.role !== 'assistant') continue;
 
-      const ts = Number(d.time?.created) || Number(m.time_created) || 0;
+      const ts = Number(m.created) || Number(m.time_created) || 0;
       if (!ts) continue;
 
-      const input = t.input || 0;
-      const cached = t.cache?.read || 0;
-      const cacheWrite = t.cache?.write || 0;
-      const output = t.output || 0;
+      const input = m.t_input || 0;
+      const cached = m.t_cache_read || 0;
+      const cacheWrite = m.t_cache_write || 0;
+      const output = m.t_output || 0;
       const total = input + cached + cacheWrite + output;
       if (total <= 0) continue;
 
@@ -78,34 +95,38 @@ export async function collectOpencodeDb(store, { tool, path, state, version }) {
       inserted += store.insertEvent({
         ts,
         tool,
-        model: normalizeModel(d.modelID),
+        model: normalizeModel(m.model_id),
         session_id: m.session_id,
         project: dir ? basename(dir) : null,
         input_tokens: input,
         cached_input: cached,
         cache_write: cacheWrite,
         output_tokens: output,
-        reasoning_tokens: t.reasoning || 0,
+        reasoning_tokens: m.t_reasoning || 0,
         total_tokens: total,
         dedup_key: `${tool}:${m.id}`,
       });
     }
 
-    const parts = db.prepare(`
-      SELECT rowid AS rid, id, session_id, time_created, data
-      FROM part WHERE rowid > ? ORDER BY rowid`).all(st.partMaxRowid);
+    // 非工具 part 在 SQL 里就筛掉；水位直接推到本轮读取范围的上界，
+    // 上界取自查询前的 MAX(rowid)，查询途中新插入的行留给下一轮。
+    const parts = iterate(`
+      SELECT * FROM (
+        SELECT id, session_id, time_created,
+          ${field('$.type')} AS type, ${field('$.tool')} AS name,
+          ${field('$.callID')} AS call_id, ${field('$.state.time.start')} AS started
+        FROM part WHERE rowid > ? AND rowid <= ? ORDER BY rowid
+      ) WHERE type = 'tool'`, st.partMaxRowid, partTop);
     for (const p of parts) {
-      st.partMaxRowid = Math.max(st.partMaxRowid, p.rid);
-      let d;
-      try { d = JSON.parse(p.data); } catch { continue; }
-      if (d?.type !== 'tool' || !d.tool) continue;
-      const ts = Number(d.state?.time?.start) || Number(p.time_created) || 0;
+      if (!p.name || typeof p.name !== 'string') continue;
+      const ts = Number(p.started) || Number(p.time_created) || 0;
       if (!ts) continue;
       store.insertToolCall({
-        ts, tool, name: d.tool, session_id: p.session_id,
-        dedup_key: `${tool}:tc:${d.callID || p.id}`,
+        ts, tool, name: p.name, session_id: p.session_id,
+        dedup_key: `${tool}:tc:${p.call_id || p.id}`,
       });
     }
+    st.partMaxRowid = Math.max(st.partMaxRowid, partTop);
   } finally {
     db.close();
   }
