@@ -260,6 +260,8 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 
 详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。核心：`src/collectors/*` 每源一个适配器（增量 + dedup + 版本号），`src/scanner.js` 统一调度，SQLite 归一化事件表，`src/server.js` HTTP API + SSE，`web/` 零构建前端（ECharts UMD）。
 
+维护流程见 [每日维护 Loop 与 CI/CD](docs/MAINTENANCE-LOOP.md)：定时扫描 PR/Issue 和 CI 变化、有限修复与草稿 PR；发布工作流默认演练，可在确认后使用 npm OIDC 发布已验证的同一安装包。
+
 **添加新数据源**只需：写一个 collector（实现 `collect(store, {path, offset, state})` → `{inserted, newOffset, state}`）、在 `src/config.js` 注册、前端加一个颜色。见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## Roadmap
