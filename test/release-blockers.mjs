@@ -212,8 +212,8 @@ async function scannerFixture() {
   writeFileSync(good, record('good'));
   const st = new Store(join(process.env.HOME, 'scanner.db'));
   try {
-    const insert = st.insertEvent.bind(st); let fail = true;
-    st.insertEvent = e => { if (fail && e.dedup_key.includes(':fail:')) throw new Error('synthetic insert failure'); return insert(e); };
+    const insert = st.upsertClaudeEvent.bind(st); let fail = true;
+    st.upsertClaudeEvent = (e, id) => { if (fail && id === 'fail') throw new Error('synthetic insert failure'); return insert(e, id); };
     const scanner = new Scanner(st);
     const result = await scanner.scanAll({ quiet: true });
     assert.equal(result.inserted, 1); assert.equal(scanner.scanning, false);

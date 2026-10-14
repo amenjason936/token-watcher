@@ -34,7 +34,9 @@ menubar/                 macOS 菜单栏 App（Swift/AppKit，需 .app bundle）
 ## 数据源格式笔记
 
 ### Claude Code / ccmr（同一解析器）
-`~/.claude/projects/<项目目录>/<会话>.jsonl`，ccmr 用独立 `CLAUDE_CONFIG_DIR=~/.claude-gateway` 同格式。每条 type=assistant 记录的 `message.usage` 即一次 API 调用；`model="<synthetic>"` 为本地合成消息须过滤；同一 message.id+requestId 会因分片重复出现 → 全局 dedup。工具调用在 content[] 的 tool_use 块。
+`~/.claude/projects/<项目目录>/<会话>.jsonl`，ccmr 用独立 `CLAUDE_CONFIG_DIR=~/.claude-gateway` 同格式。每条 type=assistant 记录的 `message.usage` 即一次 API 调用；`model="<synthetic>"` 为本地合成消息须过滤。官方 Claude 在采集器 v3 按 message.id 全局去重，ccmr 保留 message.id+requestId。工具调用在 content[] 的 tool_use 块。
+
+1.9.4 的采集器 v3 另接入 Desktop 本地 Cowork：`local-agent-mode-sessions/<org>/<account>/agent/local_ditto_*/` 下的 `audit.jsonl` 与隐藏 `.claude/projects/**`。macOS、Windows Roaming/MSIX roots 由 `claudePaths.js` 发现，目录遍历剪枝 outputs/插件。audit 使用 `_audit_timestamp` 和 `session_id`；标准 transcript 的来源优先级高于 audit。同级保留更完整用量，优先级持久化到 usage_quality，重开后不降级。仅迁移重扫时观察到的消息旧键，迁移/旧键删除/游标同事务；缺源历史保留，result.modelUsage 汇总不叠加。覆盖与恢复边界见 [Desktop 调查与修复](CLAUDE-DESKTOP-AUDIT-2026-10-14.md)。
 
 **一次响应被拆成多行，只有终结块带真实 output_tokens。** 一条 assistant 消息按 content block 分行写入（`apiBlockIndex` 0..n），共享同一个 `message.id`，`input_tokens`/`cache_read_input_tokens` 每行重复，而 `output_tokens` 在前置分片里全是 0，只有最后一块是真值：
 
@@ -47,7 +49,7 @@ block3 tool_use   3594/47360/309   ← 唯一带真实输出的一行
 
 官方 Claude Code 每行都重复携带最终 output，取首行等于取最大，看不出问题；**ccmr 网关不写 `requestId`**（官方每行都写），dedup_key 退化成 `tool:msg.id`，四个分片塌成一行，"先到者胜"留下的正是 output=0 的首块。2026-09-16 实测当日丢掉 94.5% 的输出量。
 
-因此 `store.insertEvent` 的去重语义是**"输出更大的后来者补齐该行"**而非纯 `INSERT OR IGNORE`：无冲突时行为不变，且能扛住分片跨增量扫描轮次落到不同批次的情况。不采用"跳过 `stop_reason == null`"，是因为那会新增一条静默丢弃路径——某个源一旦不写该字段就整源归零，正是下面 dsh 踩过的坑。
+因此通用 `store.insertEvent` 的去重语义是**"输出更大的后来者补齐该行"**而非纯 `INSERT OR IGNORE`：无冲突时行为不变，且能扛住分片跨增量扫描轮次落到不同批次的情况。官方 Claude v3 使用专用 `upsertClaudeEvent`，先比较来源优先级，再比较同来源完整度。不采用"跳过 `stop_reason == null`"，是因为那会新增一条静默丢弃路径——某个源一旦不写该字段就整源归零，正是下面 dsh 踩过的坑。
 
 ### Codex（坑最多）
 Codex 同时读取 `.jsonl`、`.jsonl.zst` 与 `.jsonl.zstd`。压缩日志按完整快照解压重扫，不能以压缩字节数作为 JSONL 游标；三种扩展及 `sessions`/`archived_sessions` 中同 stem 副本共用 session 与事件/工具调用去重键。多帧优先由系统 `zstd` 完整解压，单帧可回落 Node 内置解压；Node 22.13 等无内置 zstd 的运行时需可用的 `zstd` CLI。
@@ -254,45 +256,28 @@ ts，避免日志活跃把过期积分百分比刷成"新鲜"。离线跳过网�
 
 每源接入后用独立脚本（Python/独立 SQL）对原始文件重算比对，全部精确一致。Codex 的正确口径经"官方面板累计值 vs 本地差分值"交叉验证（差值为官方跨设备统计）；2026-09-28 又与 TokenTracker 1.1.2 的解析器在同一批 rollout 上逐文件比对：修正后相差 0.15%，差额精确等于对方仍计入的"重放段首条"。WorkBuddy 积分费率经最小二乘残差验证。
 
-## Antigravity / antigravity-cli：估算口径接入（2026-09-20 复核，推翻 9 月初"不可接入"结论）
-2026-09 初的调研结论是"逐请求用量没有以任何可解析的形式落地"——当时成立：conversations/*.db 的
-`gen_metadata` 为空、`.pb` 加密、transcript 无 usage 字段。该调研留了复核条件："真正用过之后重看
-`gen_metadata` 是否开始有行"。2026-09-18/20 的真实会话满足了这个条件，复核结果：
+## Antigravity / antigravity-cli：真实 usage 优先，旧日志估算（2026-10-14）
 
-- **`conversations/<uuid>.db` 的 `gen_metadata`（idx, data BLOB, size）开始有行**，且是**未加密
-  protobuf**（9 月版本的 .pb 才加密）。可解出（字段路径实测验证）：
-  `root.f1 → { f19: 模型名, f9.f10.f1: contextTokens（该轮上下文窗口大小）, f20 KV{1:"last_step_index", 2:N} }`；
-  该行覆盖到 step N，作用于 transcript 里 step N+1 的 PLANNER_RESPONSE；
-- `brain/<uuid>/.system_generated/logs/transcript.jsonl` 仍**无 usage**，但有完整对话流
-  （step_index / type / created_at / content / tool_calls / thinking）。
+新版 CLI 的 PLANNER_RESPONSE 已写入逐轮 `input_tokens`、`cache_read_tokens`、`output_tokens`。
+输入字段不含缓存，输出已包含 thinking，本项目总量为 input + cache_read + output，思维不重复相加。
+旧日志没有完整实数字段时依次使用 gen_metadata 的完整 contextTokens、完整 transcript 字符上下文；
+输出与思维按字符估算。每轮完整上下文都应计入，不能拿相邻上下文增量代替请求输入。
 
-**估算法**（与 TokenTracker 的 parseAntigravityFile 同口径，其字段路径与我们的实测互证）：
+`conversations/<uuid>.db` 的 gen_metadata 为未加密 protobuf，可解出：
+`root.f1 → { f19: 模型名, f9.f10.f1: contextTokens, f20 KV{1:"last_step_index", 2:N} }`。
+该 gen 行覆盖到 step N，映射下一步 PLANNER_RESPONSE。模型优先级为 metadata → 用户模型切换 → settings 默认。
 
-- 按 PLANNER_RESPONSE（每次 planner 调用）计一事件；
-- 输入 = 权威上下文增量：`contextTokens(step N+1 的 gen 行) - 上次计费时的上下文快照`
-  （防 O(N²) 重复计整段历史）。无 db 行时回落字符估算（会偏低：系统提示与技能清单只在
-  服务端上下文里，transcript 看不见——实测 24K vs ~1.6K）；**换模型时基线清零**
-  （切模型后整段历史确实作为新输入重发，跨模型无缓存）；
-- 输出 = est(content) + est(tool_calls)，思维链 = est(thinking)，est = CJK×1 + 其他×¼；
-  thinking 不回灌上下文累计（thoughts 不重发）；total = input + output + reasoning；
-- 模型优先级：db 行 f19 > 用户切换消息（"changed setting Model Selection …"）> variant
-  根 settings.json 默认；显示名归一成 slug（去括号档位/小写/截到 gemini|claude|gpt 前缀）。
+常规/full/重放日志按会话与步骤键去重，ACTIVE 不抢占最终 DONE。Store 以 usage_quality 保护来源质量：
+3=真实 usage，2=完整 metadata 上下文与估算输出，1=字符估算，0=旧记录尚未分类。
+实数即使比旧估算小也能覆盖；估算副本和晚到 metadata 不能覆盖已有实数。
 
-**两个实测踩到的坑**：
+pending 按事件补正，不维护相邻轮的全局差分基线；Scanner 在 transcript 不变时仍重试 pending，
+只有已有记录被修改时也发送刷新通知。采集版本 v3 触发现存历史重扫，升级前应生成一致的统计库备份。
 
-1. **上游会把历史行重放/重写进 transcript**（实测一个文件 step 70–111 整段出现两遍）。重放行
-   照常处理会双重膨胀上下文；更糟的是带权威 db 的会话里，重放算出的差分 input=0 会经
-   "权威值补正"通道**覆盖掉原计费**（真实数据恰好没有"重放 + 有 db"同时成立的文件，是
-   测试夹具先抓住的）。防护：state 记录已见 step_index（step_index 单调，重复即重放），
-   重放行整体跳过；
-2. **权威 db 行可能晚于 transcript 行落盘**：先按估算入账的事件记进 `state.pending`，
-   之后任一轮采集拿到权威值就原地 UPDATE 补正（dedup 只防重插不更新，不补正会把第一眼
-   的低估钉死；scanner 按 transcript mtime 跳过未变文件，所以补正搭"下次 transcript 变化"
-   的便车，不额外触发扫描）。
-
-**验证**：临时 HOME + 符号链接指向真实数据，独立 Python 重算逐条比对——744/744 事件、
-五列数值完全一致（含模型切换全额重计的两条、重放段去重、0 用量跳过）。估算源在 UI 与
-README 明确标注「估算」；模型无价格时如实进"未配价"列表，不编造价格。
+旧版本调查中的“没有可解析 usage”和按同一估算法独立重算一致，不能证明新版真实 token 的准确性。
+目前明确确认真实字段的版本为 CLI 1.3.4；旧 IDE/CLI 历史仍可能只能估算，所以 UI 保留 ≈。
+合成回归和逐键对账方法见 [审计说明](ANTIGRAVITY-AUDIT-2026-10-14.md)，升级步骤见
+[恢复说明](ANTIGRAVITY-RECOVERY-2026-10-14.md)。token 及 API 等值费用不等同于账号额度或账单。
 
 ## 不可统计的边界
 

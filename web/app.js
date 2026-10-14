@@ -592,13 +592,21 @@ async function loadSessions(day) {
 }
 
 // 列表按 (tool, session_id) 分组：两个工具可能同名会话，钻取必须带上 tool 才不会合并
+let sessionDetailRequest = 0;
 async function showSessionDetail(sid, tool) {
+  const request = ++sessionDetailRequest;
   const box = document.getElementById('sess-detail');
   // 无事件或请求失败：收起并清空详情，不能让上一个会话的曲线冒充本行的数据
-  const hide = () => { box.style.display = 'none'; charts.sess.clear(); };
+  const hide = () => {
+    if (request !== sessionDetailRequest) return;
+    box.style.display = 'none'; charts.sess.clear();
+  };
   try {
     const res = await fetch(`/api/session/${encodeURIComponent(sid)}?tool=${encodeURIComponent(tool)}`);
+    if (request !== sessionDetailRequest) return;
+    if (!res.ok) { hide(); return; }
     const { events } = await res.json();
+    if (request !== sessionDetailRequest) return;
     if (!events?.length) { hide(); return; }
     box.style.display = 'block';
     charts.sess.resize();

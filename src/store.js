@@ -90,6 +90,9 @@ function migrate(db, dbPath) {
   try { offloadCodexKeyArchive(db, dbPath); } catch { /* 并发占锁或磁盘满：下次启动重试 */ }
   const cols = db.prepare('PRAGMA table_info(events)').all().map(c => c.name);
   if (!cols.includes('trace_id')) db.exec('ALTER TABLE events ADD COLUMN trace_id TEXT');
+  // Antigravity: 0=历史未知，1=字符估算，2=真实上下文+估算输出，3=逐轮真实 usage。
+  // claude-code: 1=audit 回退，2=标准 transcript；旧 0 行来自原标准解析器。
+  if (!cols.includes('usage_quality')) db.exec('ALTER TABLE events ADD COLUMN usage_quality INTEGER NOT NULL DEFAULT 0');
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_session'").get();
   if (!idx) db.exec('CREATE INDEX idx_events_session ON events(session_id)'); // 会话钻取/模型回填高频查询
   // v2 模型归一：大小写变体合并（GLM-5.3-Flash → glm-5.3-flash）
@@ -109,7 +112,7 @@ function migrate(db, dbPath) {
 
 /** 采集器可能调用的全部写方法：stageWrites() 代理这些，其余（读）直通 */
 const STAGED_WRITES = ['insertEvent', 'insertDshEvent', 'insertToolCall', 'insertCredit',
-  'saveQuota', 'dropStaleCodexRows', 'correctEventInput'];
+  'saveQuota', 'dropStaleCodexRows', 'correctEventInput', 'upsertAntigravityEvent', 'upsertClaudeEvent'];
 
 export class Store {
   constructor(dbPath) {
@@ -138,6 +141,14 @@ export class Store {
         output_tokens = ?, reasoning_tokens = ?, total_tokens = ?
       WHERE dedup_key = ? AND output_tokens < ?`);
     this._deleteLegacyDshEvent = this.db.prepare("DELETE FROM events WHERE tool = 'dsh' AND dedup_key = ?");
+    this._getClaudeEvent = this.db.prepare("SELECT * FROM events WHERE tool = 'claude-code' AND dedup_key = ?");
+    this._getClaudeAliases = this.db.prepare(`SELECT * FROM events
+      WHERE dedup_key >= ? AND dedup_key < ?`);
+    this._deleteClaudeAlias = this.db.prepare("DELETE FROM events WHERE id = ? AND tool = 'claude-code'");
+    this._updateClaudeEvent = this.db.prepare(`UPDATE events SET
+      ts = ?, model = ?, session_id = ?, project = ?, input_tokens = ?, cached_input = ?,
+      cache_write = ?, output_tokens = ?, reasoning_tokens = ?, total_tokens = ?, usage_quality = ?
+      WHERE dedup_key = ? AND tool = 'claude-code'`);
     this._insertToolCall = this.db.prepare(`
       INSERT OR IGNORE INTO tool_calls (ts, tool, name, session_id, dedup_key)
       VALUES (?, ?, ?, ?, ?)`);
@@ -145,6 +156,13 @@ export class Store {
       'INSERT OR IGNORE INTO credit_usage (ts, tool, amount, dedup_key) VALUES (?, ?, ?, ?)');
     this._correctEventInput = this.db.prepare(
       'UPDATE events SET input_tokens = ?, total_tokens = ? + output_tokens + reasoning_tokens WHERE dedup_key = ?');
+    this._updateAntigravity = this.db.prepare(`
+      UPDATE events SET
+        model = COALESCE(?, model), input_tokens = ?, cached_input = ?, cache_write = 0,
+        output_tokens = ?, reasoning_tokens = ?, total_tokens = ?, usage_quality = ?
+      WHERE dedup_key = ? AND tool = 'antigravity'
+        AND (usage_quality < ? OR (usage_quality = ?
+          AND (? = 3 OR (? = 2 AND output_tokens <= ?) OR (? = 1 AND total_tokens <= ?))))`);
     this._getFile = this.db.prepare('SELECT * FROM files WHERE path = ?');
     this._upsertFile = this.db.prepare(`
       INSERT INTO files (path, tool, session_id, size, mtime_ms, offset, state_json, last_scan_ms)
@@ -189,6 +207,43 @@ export class Store {
     return inserted;
   }
 
+  /**
+   * One official message can occur in CLI, Cowork transcript, audit and mirrors.
+   * Only migrate old keys for the message actually observed in this scan. Keep
+   * missing-source history; the Scanner commits migration and cursor atomically.
+   */
+  upsertClaudeEvent(e, messageId) {
+    if (e.tool !== 'claude-code' || ![1, 2].includes(e.usage_quality) ||
+        !messageId || e.dedup_key !== `claude-code:message:${messageId}`) throw new Error('invalid Claude event');
+    const current = this._getClaudeEvent.get(e.dedup_key);
+    const prefix = `claude-code:${messageId}:`;
+    const aliases = this._getClaudeAliases.all(prefix, `claude-code:${messageId};`)
+      .filter(row => row.tool === 'claude-code' && !row.dedup_key.startsWith('claude-code:message:'));
+    let best = e;
+    for (const old of [current, ...aliases].filter(Boolean)) {
+      const candidate = { ...old, usage_quality: old.usage_quality || 2 };
+      if (candidate.usage_quality > best.usage_quality ||
+          (candidate.usage_quality === best.usage_quality &&
+            (candidate.output_tokens > best.output_tokens ||
+              (candidate.output_tokens === best.output_tokens && candidate.total_tokens >= best.total_tokens)))) best = candidate;
+    }
+    // Enrich missing metadata without changing the chosen usage or source priority.
+    const fields = ['ts', 'model', 'session_id', 'project', 'input_tokens', 'cached_input',
+      'cache_write', 'output_tokens', 'reasoning_tokens', 'total_tokens', 'usage_quality'];
+    const chosen = { ...best, model: best.model ?? e.model ?? null,
+      project: best.project ?? e.project ?? null, session_id: best.session_id ?? e.session_id ?? null };
+    if (!current) this._insertEvent.run(
+      chosen.ts, e.tool, chosen.model, chosen.session_id, chosen.project,
+      chosen.input_tokens || 0, chosen.cached_input || 0, chosen.cache_write || 0,
+      chosen.output_tokens || 0, chosen.reasoning_tokens || 0, chosen.total_tokens || 0,
+      e.dedup_key, best.trace_id ?? null);
+    if (!current || fields.some(k => (current[k] ?? null) !== (chosen[k] ?? null))) {
+      this._updateClaudeEvent.run(...fields.map(k => chosen[k] ?? null), e.dedup_key);
+    }
+    for (const row of aliases) this._deleteClaudeAlias.run(row.id);
+    return current || aliases.length ? 0 : 1;
+  }
+
   saveRates(model, fresh, cache, out, turns) {
     this.db.prepare(`
       INSERT INTO rates (model, fresh_rate, cache_rate, out_rate, turns, updated_at)
@@ -231,6 +286,23 @@ export class Store {
     this._correctEventInput.run(input, input, dedupKey);
   }
 
+  /** 真 usage 即使小于旧估算也须覆盖；旧日志/晚到 metadata 永远不能覆盖实数。 */
+  upsertAntigravityEvent(e) {
+    if (e.tool !== 'antigravity' || ![1, 2, 3].includes(e.usage_quality)) throw new Error('invalid Antigravity event');
+    const n = this._insertEvent.run(
+      e.ts, e.tool, e.model ?? null, e.session_id ?? null, e.project ?? null,
+      e.input_tokens, e.cached_input, 0, e.output_tokens, e.reasoning_tokens,
+      e.total_tokens, e.dedup_key, null,
+    ).changes;
+    this._updateAntigravity.run(
+      e.model ?? null, e.input_tokens, e.cached_input, e.output_tokens, e.reasoning_tokens,
+      e.total_tokens, e.usage_quality, e.dedup_key,
+      e.usage_quality, e.usage_quality, e.usage_quality,
+      e.usage_quality, e.output_tokens, e.usage_quality, e.total_tokens,
+    );
+    return n;
+  }
+
   /**
    * 采集器专用的写入代理：写操作先按顺序记下，解析（含异步读文件、解压）结束后由扫描器
    * 在一个同步事务里 replay()。事务因此从不跨 await——同一连接上的轮询器 / 设置写入
@@ -240,19 +312,22 @@ export class Store {
    */
   stageWrites() {
     const ops = [];
+    let changed = false;
     const staged = Object.create(this);
     for (const name of STAGED_WRITES) {
       staged[name] = (...args) => { ops.push([name, args]); return 0; };
     }
     const replay = () => {
       let inserted = 0;
+      const before = this.db.prepare('SELECT total_changes() n').get().n;
       for (const [name, args] of ops) {
         const r = this[name](...args);
-        if (name === 'insertEvent' || name === 'insertDshEvent') inserted += r;
+        if (['insertEvent', 'insertDshEvent', 'upsertAntigravityEvent', 'upsertClaudeEvent'].includes(name)) inserted += r;
       }
+      changed = this.db.prepare('SELECT total_changes() n').get().n > before;
       return inserted;
     };
-    return { store: staged, replay };
+    return { store: staged, replay, get changed() { return changed; } };
   }
 
   insertToolCall(e) {

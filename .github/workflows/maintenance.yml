@@ -1,0 +1,54 @@
+name: maintenance
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 09:00 Asia/Taipei; GitHub may delay scheduled starts.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  statuses: read
+  actions: read
+
+concurrency:
+  group: maintenance-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/cache@v4
+        with:
+          path: .maintenance-state/
+          key: maintenance-${{ github.run_id }}
+          restore-keys: maintenance-
+      - name: Scan complete PR/Issue queue and CI changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/maintenance/scan.mjs > queue.json
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const s = JSON.parse(readFileSync('queue.json', 'utf8'));
+          const lines = ['## Daily maintenance queue', `Open PRs: ${s.summary.prs}; issues: ${s.summary.issues}; changed: ${s.summary.changed}`];
+          for (const item of s.changed) lines.push(`- ${item.kind} #${item.number}: ${item.state} (${item.url})`);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maintenance-queue
+          path: queue.json
+          retention-days: 14
+          if-no-files-found: error

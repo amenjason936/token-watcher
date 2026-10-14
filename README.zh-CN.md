@@ -12,7 +12,7 @@
 
 | 工具 | 数据位置 | 能看到什么 |
 |---|---|---|
-| Claude Code | `~/.claude/projects` | 逐请求 token 明细、模型分布 |
+| Claude Code（含本地 Cowork） | `~/.claude/projects` + Desktop Cowork 日志 | 逐消息真实用量、跨格式去重 |
 | ccmr（claude-code-model-router） | `~/.claude-gateway/projects` | 同上（国产模型隔离目录，真实模型名） |
 | Codex | `~/.codex/sessions`、`archived_sessions` | token 明细、**官方配额百分比与重置时间**（5 小时 / 每周窗口）、模型（含 auto-review 子代理）、工具调用 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 逐请求明细（model_usage 表）、工具调用、**GLM Coding Plan 积分窗口**（5 小时 / 每周，官方端点） |
@@ -21,12 +21,14 @@
 | Grok Build | `~/.grok/sessions` | 轮次用量明细（含厂商侧成本刻度）、工具调用 |
 | Pi | `~/.pi/agent/sessions` | 逐请求明细、工具调用（会话 JSONL 自带 USD 成本明细） |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 逐请求明细（message 表）、工具调用 |
-| Antigravity ≈ | `~/.gemini/antigravity*/brain/*/logs/transcript.jsonl` | 每 planner 轮的上下文/输出/思维链——输入取 db 权威上下文增量，输出按字符估算 |
+| Antigravity ≈ | `~/.gemini/antigravity*/brain/**/transcript*.jsonl` | 新版逐轮真实输入/缓存/输出；旧日志按完整上下文和字符估算 |
 | Kimi Code | `~/.kimi-code/sessions/**/wire.jsonl` | 逐轮明细（step.end 用量，camelCase/Anthropic/OpenAI 兼容三形状自适应） |
 | Qoder | `~/.qoder{,-cn}/projects/**/*.jsonl` | **积分账本**（上游本地不报 token，只报 credits）；若上游恢复上报 token 则自动入事件 |
 | Cursor | 账号级用量账单（CSV） | 逐请求明细（缓存三段分项）——本地无逐请求数据，用本地凭证拉官方导出 |
 
-不支持的：网页版聊天（ChatGPT/豆包/DeepSeek 网页等）——token 计数在服务端，本地无留痕，原理上不可统计。
+**Claude Desktop 覆盖范围（1.9.4）**：已验证的本地 Cowork `agent/local_ditto_*` transcript 与 audit 日志并入 Claude Code 统计，标准 transcript 优先，两种格式及镜像共用消息身份去重。自动发现 macOS、Windows Roaming 和已安装 Claude MSIX 的目录；扩展目录支持 Windows 盘符与 UNC。本地 Code 仍要求日志落在配置目录。普通 Chat、未镜像的云端会话尚无明细采集源，result 汇总也不与逐消息用量叠加。验证与升级行为见 [Claude Desktop 调查与修复](docs/CLAUDE-DESKTOP-AUDIT-2026-10-14.md)。
+
+本项目尚未提供网页版聊天（ChatGPT/豆包/DeepSeek 网页等）的 token 明细采集；不能用对话文本长度或配额百分比代替真实用量。
 
 > **口径说明**：Kimi Code / Qoder / Antigravity 均在本机真实数据上与独立重算逐条核对一致。
 > **Qoder 实测本地只报积分不报 token**（2026-09，qmodel_38max）：积分走独立账本出
@@ -34,11 +36,13 @@
 > **Cursor 本地不留逐请求数据**（state.vscdb 全零），唯一权威是账号级 CSV 导出：
 > 凭证取自本地（state.vscdb 的 JWT 拼会话 cookie，只在服务进程内使用），30 分钟轮询。
 > Gemini CLI 上游已于 2026-06-18 官方过渡并入 Antigravity CLI，不再作为独立源。
-> **Antigravity 本地没有任何逐请求 usage**（9 月两次调研实测），采用估算口径：输入 =
-> conversations db 里 gen_metadata 的权威上下文窗口增量（protobuf，含系统提示与技能清单），
-> 输出/思维链按字符数估算（CJK×1 + 其他×¼），与 TokenTracker 同法；已在本机 744 条真实
-> 事件上与独立重算逐条核对一致。估算源在界面上以「≈」后缀标注（如 Antigravity ≈），费用卡中其模型如实列入
-> "未配价"而非编造价格。
+> **Antigravity 新版 CLI 本地已写入逐轮 usage**（2026-10-14，CLI 1.3.4 实测）：优先读取
+> input_tokens（不含缓存）、cache_read_tokens、output_tokens（含思维）；本项目总量包含缓存，
+> 不重复加思维 token。旧日志没有这些字段时，输入取 conversations/gen_metadata 的完整上下文，
+> 再回落到完整 transcript 字符上下文；输出/思维按 CJK×1 + 其他×¼ 估算。每轮都处理其上下文，
+> 不再用相邻上下文增长量代替输入。库内 usage_quality=3 为实数、2 为上下文估算、1 为字符估算。
+> 常规/full 日志去重，实数可覆盖旧估算，晚到 metadata 即使 transcript 不变也会重试。
+> 因仍有旧日志估算，界面保留「≈」；这里的 token 和 API 等价费用不代表 Google 官方剩余额度或账单。
 
 ## 快速开始
 
@@ -244,6 +248,12 @@ token-watcher extra-roots remove claude-code ~/mirror/home-pc/claude/projects
 `~/.tokenmeter/pricing.json`（可设 `usd_to_cny` + `usd_to_cny_manual: true` 固定汇率）。
 回归测试即以此模式运行，不依赖公网。
 
+费用解析优先级：用户 `pricing.json` → 已核实的官方价格与来源限定别名 → LiteLLM 缓存牌价。
+Gemini 3.8 Flash 的 Antigravity 内部名、Cursor MAX/Fast 等模式在价格层解析，保留原始用量记录。
+缓存读、缓存写分别计价，明确免费模型按零价识别；自动路由或身份未知的模型继续标记缺价。
+订阅工具显示 API 等值估算；Cursor/Grok 多次调用汇总无法还原单次长上下文档位，按标准档估算。
+详见 [2026-10-14 全模型价格核对](docs/MODEL-PRICING-AUDIT-2026-10-14.md)。
+
 ## 免责声明
 
 Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**私有格式**（无稳定性承诺），上游版本升级可能导致个别源解析中断——健康面板会标出，欢迎提 issue。各产品版权归其厂商所有。
@@ -251,6 +261,8 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 ## 架构
 
 详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。核心：`src/collectors/*` 每源一个适配器（增量 + dedup + 版本号），`src/scanner.js` 统一调度，SQLite 归一化事件表，`src/server.js` HTTP API + SSE，`web/` 零构建前端（ECharts UMD）。
+
+维护流程见 [每日维护 Loop 与 CI/CD](docs/MAINTENANCE-LOOP.md)：定时扫描 PR/Issue 和 CI 变化、有限修复与草稿 PR；发布工作流默认演练，可在确认后使用 npm OIDC 发布已验证的同一安装包。
 
 **添加新数据源**只需：写一个 collector（实现 `collect(store, {path, offset, state})` → `{inserted, newOffset, state}`）、在 `src/config.js` 注册、前端加一个颜色。见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -263,6 +275,28 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 - i18n / 英文 README
 
 ## 更新日志
+
+### 1.9.4（2026-10-14）
+
+- 补采已验证的 Desktop 本地 Cowork transcript/audit；按消息 ID 跨格式去重，标准 transcript 优先，镜像、重扫与重开不双计。
+- 修复 Windows 盘符、UNC 和 tilde 扩展目录校验；CLI 与配置加载共用规则。
+- 旧键合并与游标提交同事务，失败回滚、保留缺源历史；30 项定向及 863 项完整隔离回归通过。
+- Chat/未镜像云端和 result 汇总仍有覆盖边界，升级前先备份；详见 [1.9.4 说明](docs/RELEASE-1.9.4.md)。
+
+### 1.9.3（2026-10-14）
+
+- **每日维护 Loop**：09:00（Asia/Taipei）完整分页扫描 PR/Issue 与 CI 变化，增量快照避免重复待办；有限修复和草稿 PR，合并与发版需维护者确认。
+- **受验证的发布流程**：版本标签、main 祖先关系和完整 CI 通过后构建 universal 安装包并验证干净安装；默认演练，标签先生成 Release 草稿。正式发布通过 npm OIDC 与 GitHub 环境审核进行，发布包与 registry 逐字节核对后再公开 Release。
+- **草稿复用保护**：正式发布前与公开前核对已有草稿安装包和校验文件；相同产物可继续公开，附件不一致/缺失或读取失败则停止。
+- 完整隔离回归 829 项通过；保留 1.9.2 的 Antigravity 用量和模型定价修复，详见 [维护协议](docs/MAINTENANCE-LOOP.md)。
+
+### 1.9.2（2026-10-14）
+
+- **Antigravity 真实用量与历史补正**：优先读取逐轮非缓存输入、缓存读和含思维输出；旧日志按完整上下文估算，不再按相邻轮差分。实数可覆盖旧估算，常规/full/重放日志统一去重，ACTIVE 不抢占 DONE。
+- **晚到 metadata 与刷新**：会话结束后 transcript 不变化也重试待补元数据；仅补正已有记录时通知面板，质量标记防止估算覆盖实数。采集版本 v3 会重扫现存日志，升级前建议生成一致 SQLite 备份，见 [恢复说明](docs/ANTIGRAVITY-RECOVERY-2026-10-14.md)。
+- **补齐官方模型价格与来源别名**：Gemini 4 Argon、Antigravity Gemini 3.8 Flash、Step 5 Preview、Cursor Opus 5.5 MAX、Grok 4.7 Fast/Build、Kimi K3、Hy4 与完整 OpenRouter ID；免费名称按零价识别，身份未知的自动路由名称保留缺价。
+- **缓存与模式计价**：缓存读/写分别计费，覆盖 Google 优惠截止、Cursor MAX/Fast 加价和 Grok 上下文档位；用户价格仍优先，费用卡/按天图/ROI 保持一致。订阅工具是现价 API 等值估算，多次调用汇总按标准档估算，见 [价格核对](docs/MODEL-PRICING-AUDIT-2026-10-14.md)。
+- 完整隔离回归 820 项通过，真实日志独立逐键对账、重复重扫幂等、在线费用 API 与实际图表验收通过。
 
 ### 1.9.1（2026-10-13）
 
@@ -344,7 +378,7 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 
 - **新增订阅 ROI**：回答"我这个月 ¥X 的订阅值不值"。配置 `~/.tokenmeter/subscriptions.json`
   的月费后，面板出"订阅 ROI（本月）"卡、CLI 出 `token-watcher roi [--json]`：逐订阅对比
-  本月 **API 等值成本**（与费用卡同一条链路：pricing.json > LiteLLM×汇率 + 峰谷）与
+  本月 **API 等值成本**（与费用卡同一条链路：pricing.json > 官方回退 > LiteLLM×汇率 + 峰谷）与
   **订阅实付**（price_cny / price_usd 二选一）。比值 ×N≥1 标"划算"；积分制工具（Qoder）
   如实显示本月积分消耗、不硬造比值；卡片明确标注假设性口径（订阅含速率限制、API 可能
   有折扣价）。未配置时若订阅制工具本月已有花费，显示引导卡与本月等值合计
@@ -371,7 +405,7 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
   项目名来自 workspaces.json）；Qoder 解析 `~/.qoder{,-cn}/projects/**`（实测本地只报
   积分不报 token：积分入独立账本出卡，token 事件待上游恢复上报自动生效）。
   Gemini CLI 上游已于 2026-06-18 官方过渡并入 Antigravity CLI，不再单列。
-  Antigravity 为**估算口径**（本地无逐请求 usage，实测两轮确认）：输入取 conversations
+  当时 Antigravity 为**估算口径**（旧版日志无逐请求 usage；新版支持见顶部口径说明）：输入取 conversations
   db 的 gen_metadata 权威上下文增量，输出/思维链按字符估算（CJK×1+其他×¼，与
   TokenTracker 同法），界面标注「估算」；估算法在本机 744 条真实事件上与独立重算逐条
   核对一致，且处理了上游 transcript 重放历史行的去重（step_index 重复即跳过，防上下文

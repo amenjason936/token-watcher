@@ -151,10 +151,15 @@ async function dashboardCases(ok) {
     fetch: async (u) => {
       requests.push(u);
       if (u.startsWith('/api/sessions')) return { ok: true, status: 200, json: async () => ({ sessions }) };
-      const { status = 200, body, reject, badJson } = detail(u);
+      const { status = 200, body, reject, badJson, wait, jsonWait } = detail(u);
+      if (wait) await wait;
       // 错误对象取自面板所在的 realm（浏览器里 fetch / json() 抛的就是页面自己的 TypeError / SyntaxError）
       if (reject) throw vm.runInContext("new TypeError('Failed to fetch')", context);
-      return { ok: status === 200, status, json: async () => { if (badJson) throw vm.runInContext("new SyntaxError('bad json')", context); return body; } };
+      return { ok: status === 200, status, json: async () => {
+        if (jsonWait) await jsonWait;
+        if (badJson) throw vm.runInContext("new SyntaxError('bad json')", context);
+        return body;
+      } };
     },
     esc, encodeURIComponent, Date, JSON, Promise,
     TOOL_LABEL, prettyModel: (m) => m, fmt: String, fmtShort: String,
@@ -207,7 +212,7 @@ async function dashboardCases(ok) {
     '事件为空': () => ({ body: { events: [] } }),
     '400 错误体': () => ({ status: 400, body: { error: 'bad session id' } }),
     '请求失败': () => ({ reject: true }),
-    '应答不是 JSON': () => ({ status: 500, badJson: true }),
+    '应答不是 JSON': () => ({ status: 200, badJson: true }),
   };
   for (const [name, reply] of Object.entries(failures)) {
     detail = () => ({ body: { events: [{ ts: 1, total_tokens: 1 }] } });
@@ -224,6 +229,51 @@ async function dashboardCases(ok) {
   detail = () => ({ body: { events: [{ ts: 1, total_tokens: 1 }] } });
   await click(rows[0]);
   ok('空详情：之后点有数据的行重新显示', el('sess-detail').style.display === 'block', el('sess-detail').style.display);
+
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise(r => { resolve = r; });
+    return { promise, resolve };
+  };
+  const success = () => ({ body: { events: [{ ts: 1, total_tokens: 1 }] } });
+  // A 先请求，B 先显示：A 的迟到成功、空数据及各种失败均不能影响 B。
+  for (const [name, reply] of Object.entries({ ...failures, '成功': success })) {
+    const gate = deferred();
+    let n = 0;
+    detail = () => ++n === 1 ? { ...reply(), wait: gate.promise } : success();
+    const old = context.showSessionDetail('older', 'codex');
+    await context.showSessionDetail('newer', 'claude-code');
+    const titles = chart.titles.length, cleared = chart.cleared;
+    gate.resolve();
+    await old;
+    ok(`迟到${name}不覆盖最新详情`, el('sess-detail').style.display === 'block'
+      && chart.titles.length === titles && chart.titles.at(-1).includes('newer'));
+    ok(`迟到${name}不清空最新详情`, chart.cleared === cleared);
+  }
+
+  // fetch 已成功但 JSON 还未完成，也是旧请求；仅在 fetch 后检查一次不够。
+  const bodyGate = deferred();
+  let n = 0;
+  detail = () => ++n === 1 ? { ...success(), jsonWait: bodyGate.promise } : success();
+  const oldBody = context.showSessionDetail('older-body', 'codex');
+  await new Promise(r => setImmediate(r));
+  await context.showSessionDetail('newer-body', 'claude-code');
+  const titles = chart.titles.length;
+  bodyGate.resolve();
+  await oldBody;
+  ok('迟到 JSON 不覆盖最新详情', chart.titles.length === titles && chart.titles.at(-1).includes('newer-body'));
+
+  // 最新请求失败时保持收起，旧成功不能重新显示；同 ID 重试同样按请求顺序判断。
+  const retryGate = deferred();
+  n = 0;
+  detail = () => ++n === 1 ? { ...success(), wait: retryGate.promise } : { reject: true };
+  const oldRetry = context.showSessionDetail('same-id', 'codex');
+  await context.showSessionDetail('same-id', 'codex');
+  const titlesAfterFailure = chart.titles.length;
+  retryGate.resolve();
+  await oldRetry;
+  ok('同 ID 旧成功不能重开最新失败收起的详情', el('sess-detail').style.display === 'none'
+    && chart.titles.length === titlesAfterFailure);
 }
 
 export async function testSessionDrilldown(ok) {

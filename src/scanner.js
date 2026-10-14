@@ -36,14 +36,14 @@ const COLLECTORS = {
  */
 const isSyncConflict = (name) => name.includes('.sync-conflict-') || / \(\d+\)\.[^.]+$/.test(name);
 
-async function* walkByExt(root, match) {
+async function* walkByExt(root, match, descend) {
   let entries;
   try { entries = await readdir(root, { withFileTypes: true }); }
   catch { return; }
   for (const e of entries) {
     const p = join(root, e.name);
-    if (e.isDirectory()) yield* walkByExt(p, match);
-    else if (e.isFile() && !isSyncConflict(e.name) && match(e.name)) yield p;
+    if (e.isDirectory() && (!descend || descend(p))) yield* walkByExt(p, match, descend);
+    else if (e.isFile() && !isSyncConflict(e.name) && match(e.name, p)) yield p;
   }
 }
 
@@ -68,7 +68,7 @@ async function* enumerate(source) {
     // jsonl 源可声明 match 收窄文件名（antigravity 的 brain 下只认 transcript*.jsonl，
     // 其余 jsonl（如会话元数据）不产生文件行）
     const match = source.match || ((n) => n.endsWith('.jsonl'));
-    for await (const p of walkByExt(root, match)) yield [p, null];
+    for await (const p of walkByExt(root, match, source.descend)) yield [p, null];
   }
 }
 
@@ -113,7 +113,7 @@ export class Scanner extends EventEmitter {
     if (this.scanning) return { skippedConcurrent: true };
     this.scanning = true;
     const t0 = Date.now();
-    let files = 0, inserted = 0;
+    let files = 0, inserted = 0, changed = false;
 
     try {
     for (const src of SOURCES) {
@@ -142,7 +142,9 @@ export class Scanner extends EventEmitter {
         const needFull = !prev || prev._v !== src.version;
         // mtime 跳过仅用于文件型源（sqlite 的 WAL 写入不改变主文件 mtime），且须版本一致
         const unchanged = row && row.size === s.size && row.mtime_ms === s.mtimeMs;
-        if (src.kind !== 'sqlite' && unchanged && !needFull) continue;
+        // Antigravity metadata 可能在最后一条 transcript 之后到位；pending 仍须重试。
+        const retryPending = src.collector === 'antigravity' && prev?.pending?.length > 0;
+        if (src.kind !== 'sqlite' && unchanged && !needFull && !retryPending) continue;
         const compressedSnapshot = src.collector === 'codex' && /\.jsonl\.(?:zst|zstd)$/i.test(path);
         const state = needFull || compressedSnapshot ? undefined : prev;
         const cursor = row?.offset ?? 0;
@@ -175,6 +177,7 @@ export class Scanner extends EventEmitter {
             state_json: r.state ? JSON.stringify(r.state) : null,
           });
           this.store.db.exec('COMMIT');
+          changed ||= staged.changed;
         } catch (err) {
           this.store.db.exec('ROLLBACK');
           fail(err);
@@ -190,7 +193,7 @@ export class Scanner extends EventEmitter {
     if (!quiet) {
       this.log(`scan: ${files} files, +${inserted} events in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     }
-    if (inserted > 0) this.emit('update');
+    if (inserted > 0 || changed) this.emit('update');
     return { files, inserted };
   }
 

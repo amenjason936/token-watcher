@@ -1,0 +1,279 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag, for example v1.9.2'
+        required: true
+        type: string
+      mode:
+        description: 'verify builds only; draft prepares a release; publish also publishes npm'
+        type: choice
+        default: verify
+        options: [verify, draft, publish]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.request.outputs.tag }}
+      mode: ${{ steps.request.outputs.mode }}
+      sha: ${{ steps.validate.outputs.sha }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate request before checkout
+        id: request
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+          REQUESTED_MODE: ${{ inputs.mode || 'draft' }}
+        run: |
+          [[ "$REQUESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          case "$REQUESTED_MODE" in verify|draft|publish) ;; *) exit 1 ;; esac
+          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          echo "mode=$REQUESTED_MODE" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.request.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Require matching version, main ancestry and successful main CI
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.request.outputs.tag }}
+          RELEASE_MODE: ${{ steps.request.outputs.mode }}
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync, spawnSync } from 'node:child_process';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (`v${version}` !== process.env.RELEASE_TAG) throw new Error('Tag/package version mismatch');
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          execFileSync('git', ['merge-base', '--is-ancestor', sha, 'origin/main']);
+          let ready = false;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const data = JSON.parse(execFileSync('gh', ['api', `repos/${process.env.GH_REPO}/actions/workflows/test.yml/runs?head_sha=${sha}&per_page=100`], { encoding: 'utf8' }));
+            const run = data.workflow_runs.find(r => r.head_sha === sha && r.head_branch === 'main' && r.event === 'push');
+            if (run?.status === 'completed') {
+              if (run.conclusion !== 'success') throw new Error('Main CI failed');
+              const jobs = JSON.parse(execFileSync('gh', ['api', `repos/${process.env.GH_REPO}/actions/runs/${run.id}/jobs?per_page=100`], { encoding: 'utf8' }));
+              if (jobs.jobs.length < 10 || jobs.jobs.some(j => j.conclusion !== 'success')) throw new Error('Incomplete CI gate');
+              ready = true; break;
+            }
+            await new Promise(r => setTimeout(r, 15000));
+          }
+          if (!ready) throw new Error('CI not ready within five minutes; retry later');
+          if (process.env.RELEASE_MODE === 'publish') {
+            const query = spawnSync('npm', ['view', `token-watcher@${version}`, 'version', '--json', '--prefer-online'], { encoding: 'utf8' });
+            if (query.status === 0) throw new Error('Version already published; refusing overwrite');
+            if (JSON.parse(query.stdout || '{}').error?.code !== 'E404') throw new Error('Cannot verify npm version availability');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\nversion=${version}\n`);
+          JS
+
+  build:
+    needs: gate
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+      - name: Build universal package and checksum
+        env:
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          npm pack --pack-destination "$RUNNER_TEMP/release"
+          lipo -archs bin/token-watcher.app/Contents/MacOS/token-watcher
+          cp "docs/RELEASE-${RELEASE_VERSION}.md" "$RUNNER_TEMP/release/RELEASE_NOTES.md"
+          cd "$RUNNER_TEMP/release"
+          shasum -a 256 "token-watcher-${RELEASE_VERSION}.tgz" > SHA256SUMS
+      - name: Verify a clean install
+        env:
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+          TOKENMETER_OFFLINE: '1'
+          TOKENMETER_NO_KEYCHAIN: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/smoke-home"
+          npm install --prefix "$RUNNER_TEMP/consumer" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/release/token-watcher-${RELEASE_VERSION}.tgz"
+          node --input-type=module <<'JS'
+          import { spawn, execFileSync } from 'node:child_process';
+          const root = `${process.env.RUNNER_TEMP}/consumer`;
+          const home = `${process.env.RUNNER_TEMP}/smoke-home`;
+          const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: `${home}/data`, XDG_CONFIG_HOME: `${home}/config`, LOCALAPPDATA: `${home}/local`, APPDATA: `${home}/roaming` };
+          const cli = `${root}/node_modules/token-watcher/bin/tokenwatcher.js`;
+          const version = execFileSync(process.execPath, [cli, '--version'], { env, encoding: 'utf8' }).trim();
+          if (version !== `token-watcher v${process.env.RELEASE_VERSION}`) throw new Error('Installed version mismatch');
+          const child = spawn(process.execPath, [cli, 'serve', '--port', '8799', '--no-open'], { env, stdio: 'inherit' });
+          try {
+            let ready = false;
+            for (let i = 0; i < 40; i++) {
+              try { if ((await fetch('http://127.0.0.1:8799/api/summary?days=1')).ok) { ready = true; break; } } catch {}
+              await new Promise(r => setTimeout(r, 500));
+            }
+            if (!ready) throw new Error('Installed server unavailable');
+            for (const resource of ['/', '/app.js', '/style.css', '/lib/format.js', '/lib/series.js', '/vendor/echarts.min.js']) {
+              if (!(await fetch(`http://127.0.0.1:8799${resource}`)).ok) throw new Error(`Resource missing: ${resource}`);
+            }
+          } finally { child.kill(); }
+          JS
+      - name: Check existing draft before npm can publish
+        if: needs.gate.outputs.mode != 'verify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+          RELEASE_DIR: ${{ runner.temp }}/release
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, mkdtempSync } from 'node:fs';
+          import { join } from 'node:path';
+          // BEGIN release draft guard
+          const env = process.env;
+          const releases = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', `repos/${env.GH_REPO}/releases?per_page=100`], { encoding: 'utf8' })).flat();
+          const existing = releases.find(r => r.tag_name === env.RELEASE_TAG);
+          if (existing) {
+            if (!existing.draft) throw new Error('Public Release exists; refusing overwrite');
+            const dir = mkdtempSync(join(env.RUNNER_TEMP, 'reviewed-draft-'));
+            const archive = `token-watcher-${env.RELEASE_VERSION}.tgz`;
+            execFileSync('gh', ['release', 'download', env.RELEASE_TAG, '--repo', env.GH_REPO, '--pattern', archive, '--pattern', 'SHA256SUMS', '--dir', dir]);
+            for (const file of [archive, 'SHA256SUMS']) {
+              if (!readFileSync(join(dir, file)).equals(readFileSync(join(env.RELEASE_DIR, file)))) throw new Error('Draft artifact differs from verified package');
+            }
+          }
+          // END release draft guard
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  npm:
+    needs: [gate, build]
+    if: needs.gate.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release
+      - name: Publish exact verified artifact with OIDC
+        env:
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          cd release
+          sha256sum --check SHA256SUMS
+          npm publish "token-watcher-${RELEASE_VERSION}.tgz" --ignore-scripts --provenance --access public --tag latest
+      - name: Wait for registry and verify published bytes before making Release public
+        env:
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync, spawnSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const version = process.env.RELEASE_VERSION;
+          let metadata;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const r = spawnSync('npm', ['view', `token-watcher@${version}`, 'version', 'dist', 'dist-tags', '--json', '--prefer-online'], { encoding: 'utf8' });
+            if (r.status === 0) {
+              const data = JSON.parse(r.stdout);
+              if (data.version === version && data['dist-tags'].latest === version) { metadata = data; break; }
+            }
+            await new Promise(r => setTimeout(r, 15000));
+          }
+          if (!metadata) throw new Error('Registry is still processing; keep GitHub Release unpublished');
+          const url = `https://registry.npmjs.org/token-watcher/-/token-watcher-${version}.tgz`;
+          if (metadata.dist.tarball !== url) throw new Error('Unexpected registry tarball URL');
+          const published = execFileSync('curl', ['-fsSL', '--max-time', '30', url]);
+          const original = readFileSync(`release/token-watcher-${version}.tgz`);
+          if (!published.equals(original)) throw new Error('Published tarball differs from verified artifact');
+          JS
+
+  github-release:
+    needs: [gate, build, npm]
+    if: always() && needs.build.result == 'success' && (needs.gate.outputs.mode == 'draft' || (needs.gate.outputs.mode == 'publish' && needs.npm.result == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Create or promote the matching reviewed draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.gate.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
+          RELEASE_MODE: ${{ needs.gate.outputs.mode }}
+          RELEASE_DIR: release
+        run: |
+          cd release
+          sha256sum --check SHA256SUMS
+          cd ..
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, mkdtempSync } from 'node:fs';
+          import { join } from 'node:path';
+          // BEGIN release draft guard
+          const env = process.env;
+          const releases = JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', `repos/${env.GH_REPO}/releases?per_page=100`], { encoding: 'utf8' })).flat();
+          const existing = releases.find(r => r.tag_name === env.RELEASE_TAG);
+          if (existing) {
+            if (!existing.draft) throw new Error('Public Release exists; refusing overwrite');
+            const dir = mkdtempSync(join(env.RUNNER_TEMP, 'reviewed-draft-'));
+            const archive = `token-watcher-${env.RELEASE_VERSION}.tgz`;
+            execFileSync('gh', ['release', 'download', env.RELEASE_TAG, '--repo', env.GH_REPO, '--pattern', archive, '--pattern', 'SHA256SUMS', '--dir', dir]);
+            for (const file of [archive, 'SHA256SUMS']) {
+              if (!readFileSync(join(dir, file)).equals(readFileSync(join(env.RELEASE_DIR, file)))) throw new Error('Draft artifact differs from verified package');
+            }
+          }
+          // END release draft guard
+          if (existing) {
+            if (env.RELEASE_MODE === 'publish') execFileSync('gh', ['release', 'edit', env.RELEASE_TAG, '--repo', env.GH_REPO, '--draft=false', '--latest']);
+          } else {
+            execFileSync('gh', ['release', 'create', env.RELEASE_TAG, '--repo', env.GH_REPO, '--verify-tag', '--title', env.RELEASE_TAG,
+              '--notes-file', 'release/RELEASE_NOTES.md', env.RELEASE_MODE === 'publish' ? '--latest' : '--draft',
+              `release/token-watcher-${env.RELEASE_VERSION}.tgz`, 'release/SHA256SUMS']);
+          }
+          JS
