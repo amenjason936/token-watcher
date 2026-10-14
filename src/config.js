@@ -2,6 +2,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { normalizeExtraRoot } from './rootPaths.js';
+import { coworkRoots, matchClaudeFile, descendClaudeDir } from './claudePaths.js';
 
 export const HOME = homedir();
 
@@ -40,10 +42,12 @@ export const SOURCES = [
   {
     tool: 'claude-code',
     label: 'Claude Code',
-    roots: [join(HOME, '.claude/projects')],
+    roots: [join(HOME, '.claude/projects'), ...coworkRoots(HOME)],
     kind: 'jsonl',
     collector: 'claude',
-    version: 2, // v2: 提取 tool_use 工具调用
+    version: 3, // v3: Cowork discovery/audit fallback and cross-format message identity
+    match: matchClaudeFile,
+    descend: descendClaudeDir,
     subscription: true,
   },
   {
@@ -210,10 +214,9 @@ function applyExtraRoots(sources) {
     if (!src) { console.warn(`extra-roots.json：未登记的工具 "${tool}"，已忽略`); continue; }
     if (src.kind === 'poller') { console.warn(`extra-roots.json：${tool} 是账号级轮询源，无本地目录可扩展`); continue; }
     if (!Array.isArray(roots)) { console.warn(`extra-roots.json：${tool} 的值应为路径数组，已忽略`); continue; }
-    for (let r of roots) {
-      if (typeof r !== 'string' || !(r = r.trim())) continue;
-      if (r.startsWith('~/')) r = join(HOME, r.slice(2));
-      else if (!r.startsWith('/')) { console.warn(`extra-roots.json：${tool} 的 "${r}" 不是绝对路径，已忽略`); continue; }
+    for (const raw of roots) {
+      const r = normalizeExtraRoot(raw, HOME);
+      if (!r) { console.warn(`extra-roots.json：${tool} 的路径不是有效绝对路径，已忽略`); continue; }
       if (!src.roots.includes(r)) {
         src.roots.push(r);
         (EXTRA_ROOTS[tool] ??= []).push(r);

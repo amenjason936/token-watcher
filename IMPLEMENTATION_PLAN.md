@@ -1,5 +1,47 @@
 # 修复 token 统计与官方口径的三处偏差
 
+## 2026-10-14 发布 Cowork 与 Windows 路径修复（1.9.4）
+
+用户明确授权提交、推送 GitHub 并发布 1.9.4；该授权包含本版本既有 npm-release 环境的发布审核。Windows 内网同步任务的文件和个人配置不进入本次提交/发布。测试沿用已批准的隔离目录、合成库与清理范围。
+
+1. [x] 核对 main、GitHub/npm 当前为 1.9.3，1.9.4 未占用；准备版本、lockfile、更新日志与发布说明。
+2. [x] 独立候选快照 863 项完整隔离回归通过，73 个包内文件与候选逐字节一致；universal 为 arm64/x86_64。干净安装版本为 1.9.4，合成 Cowork 两次扫描保持 2 事件/500 tokens，八个资源/API 端点及数据库对账通过。
+3. [ ] 提交推送目标修复，确认 macOS/Linux/Windows CI；创建 v1.9.4 标签和 Release 草稿。
+4. [ ] 审核本次固定产物并通过 OIDC 发布，核对 registry/GitHub/provenance 和 Homebrew。
+
+正式用量库与本机全局安装/服务不进入发布步骤；本次不会自行回填或重启。
+
+## 2026-10-14 修复已确认的 Cowork 漏采与 Windows 路径
+
+用户授权实现已确认的问题并补测试。沿用已批准的 `/private/tmp/token-watcher-antigravity-fix-wbmnvnuv/` 合成库及测试删除范围；本轮不运行正式库回填或重启服务。
+
+1. [x] 限定已验证的 agent/local_ditto/.claude/projects 与 audit，剪枝输出/插件目录；官方 Claude 按消息 ID 去重，仅迁移已观察旧键。CLI/配置共用宿主平台的扩展路径归一。
+2. [x] Cowork roots 接入 claude-code v3；标准 transcript 优先、audit 回退，来源优先级持久化，旧键合并与游标同事务。ccmr 保持旧键/流式规则，result.modelUsage 不叠加。
+3. [x] 新增 30 项定向回归：平台路径/宿主 CLI-config 集成、约束发现、正反扫描、镜像与缺 requestId、重开优先级、晚到字段、旧键迁移、缺源/删除及失败回滚。原故障注入改为拦截实际 Claude 写入方法，回滚断言保持。
+4. [x] macOS Node 24.14.0 下 863 项完整隔离回归全通过；真实历史日志仅进内存，独立逐字段核对，正反顺序及重复重放均为 113 唯一消息/117 唯一调用。语法/diff/打包检查通过，新模块和报告入包，私人副本/收据排除；README、调查/部署说明与工程笔记已更新。Windows 使用 win32 模拟和跨平台夹具，未称为反馈者实机验收。未发布或改正式服务/数据库。
+
+验收收据：批准的临时目录下 `cowork-fix/focused-test.log`、`full-test-final.log`、`historical-verification.json` 与 `pack-verification.json`。未新增依赖；发布版本仍为 1.9.3（本轮补丁尚未发行）。
+
+## 2026-10-14 调查 Claude Desktop 用量覆盖
+
+补充反馈：用户确认 Chat、Code、Cowork 都受影响，平台 Windows。随后说明版本不明、暂无法询问；此前 `1.8.2` 的软件归属未确认，仅作为 token-watcher 发布版本对照，不当成反馈者已确认安装版本。Claude Desktop 版本和 Code 执行位置均未知，不等待补询。用户已允许只读检查 Claude IndexedDB/Local Storage 并在此前批准的临时目录建立隔离副本。
+
+1. [x] 核对实际 npm 1.8.2 发布包与当前版本；Claude 采集器相同，1.8.2 未含 extra-roots。Windows 候选路径与只读 PowerShell 检查方法已写入报告；暂无法取得反馈者实机结果，该个案原因保留为未验证。
+2. [x] 两处获准存储复制前后及解码后 SHA-256 一致；离线解码 79 个 Local Storage 项、5 条 IndexedDB 数据记录，未发现常见精确 token 字段。跳过凭证名称，不读取 Cookies/外部 blob，不改原库。
+3. [x] 1.8.2 对同一历史 Cowork 样本复现相同漏扫/格式问题；Desktop Code 日志路径引用均为目录缺失线索。额外复现当前 extra-roots 拒绝合法 Windows 盘符与 UNC 路径，发生在配置写入前；该缺陷仍未修改。
+4. [x] 更新调查说明、Windows 只读排查片段和忽略的工程笔记；git diff --check、旧版内存 probe、脱敏字段检查及打包清单通过。报告纳入后续包清单，私人收据/副本不入包；仅升级 1.9.3 不能覆盖三种模式。本轮无采集器修改、提交推送或正式库回填。
+
+此前已完成的第一轮证据：
+
+1. [x] 检查现有 Claude 采集源、配额路径与 GitHub 用户反馈；区分 Chat、Code 和 Cowork。
+2. [x] 核对官方文档、历史 local-agent JSONL 与配额缓存字段。当前正式 Claude.app/ASAR 未找到，未进行已安装最新版的静态分析；证据限定于 2026-03-25、CLI 2.1.78 的历史 Cowork 样本。
+3. [x] 现有采集器直接读日志至内存 sink，不打开数据库：标准 transcript 可解析，audit 因缺少 timestamp 被跳过；两者均未归属已配置扫描 root。对齐消息 ID 发现输出字段差异及额外 modelUsage，证明不能直接叠加。
+4. [x] 保存 docs/CLAUDE-DESKTOP-AUDIT-2026-10-14.md，区分本地/云端 Code、历史 Cowork 和 Chat 的覆盖与未知范围，并给出修复及验收方案。
+
+调查阶段不修改真实用量库、不使用账号凭证调用未验证接口，也不向反馈用户发表评论。
+
+只读内存验证收据保留于本地临时目录的 claude-desktop-audit/probe-report.json；公开调查说明不包含私人会话正文、账号/会话 ID 或实际用量合计。Windows 客户端路径与格式仍需实机样本，不能把本机旧日志原因直接认定为该用户唯一原因。
+
 ## 2026-10-14 发布 1.9.3 并首次验证 npm Trusted Publisher
 
 用户明确授权发布 1.9.3 并完成 npm Trusted Publisher 首次验证。本次授权适用于已验收的安装包及相应 GitHub 发布环境审核；后续版本仍须另行确认。

@@ -54,7 +54,7 @@ spend so you can see when the estimate drifts.
 
 | Tool | Data location | What you get |
 |---|---|---|
-| Claude Code | `~/.claude/projects` | Per-request tokens, model mix |
+| Claude Code (including local Cowork) | `~/.claude/projects` + Desktop Cowork logs | Per-message usage, cross-format dedup |
 | ccmr (claude-code-model-router) | `~/.claude-gateway/projects` | Same, with real model names behind the router |
 | Codex | `~/.codex/sessions` | Per-request tokens, **official quota % and resets** (5h / weekly), models incl. auto-review, tool calls |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | Per-request details, tool calls, **GLM Coding Plan credit windows** (5h / weekly, official API) |
@@ -68,7 +68,9 @@ spend so you can see when the estimate drifts.
 | Qoder | `~/.qoder{,-cn}/projects/**` | **Credits ledger** (upstream reports credits, not tokens, locally) |
 | Cursor | Account-level usage CSV | Per-request details — Cursor stores nothing per-request locally, so this polls the official export with local credentials |
 
-Not supported: web chats (ChatGPT etc.) — token counts live server-side, nothing to parse.
+**Claude Desktop coverage (1.9.4):** local Cowork's verified `agent/local_ditto_*` transcripts and audit logs count under Claude Code. Standard transcripts take priority; both formats and mirrors share message identity. macOS, Windows roaming and installed Claude MSIX roots are discovered; Windows drive/UNC extra roots are supported. Local Code sessions count in configured roots. Chat and cloud sessions without local mirrored transcripts still have no collector; result summaries are not added to per-message usage. See [coverage, tests and upgrade behavior](docs/CLAUDE-DESKTOP-AUDIT-2026-10-14.md).
+
+Not supported: per-request token collection for web chat apps (ChatGPT etc.). No verified collector is included for these sources; conversation length and quota percentages are not substitutes for actual usage.
 
 > **Honest-caliber notes**: Kimi Code, Qoder, Antigravity and Cursor were each
 > verified on real local data against an independent recomputation, row by row.

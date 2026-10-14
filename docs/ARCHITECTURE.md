@@ -34,7 +34,9 @@ menubar/                 macOS 菜单栏 App（Swift/AppKit，需 .app bundle）
 ## 数据源格式笔记
 
 ### Claude Code / ccmr（同一解析器）
-`~/.claude/projects/<项目目录>/<会话>.jsonl`，ccmr 用独立 `CLAUDE_CONFIG_DIR=~/.claude-gateway` 同格式。每条 type=assistant 记录的 `message.usage` 即一次 API 调用；`model="<synthetic>"` 为本地合成消息须过滤；同一 message.id+requestId 会因分片重复出现 → 全局 dedup。工具调用在 content[] 的 tool_use 块。
+`~/.claude/projects/<项目目录>/<会话>.jsonl`，ccmr 用独立 `CLAUDE_CONFIG_DIR=~/.claude-gateway` 同格式。每条 type=assistant 记录的 `message.usage` 即一次 API 调用；`model="<synthetic>"` 为本地合成消息须过滤。官方 Claude 在采集器 v3 按 message.id 全局去重，ccmr 保留 message.id+requestId。工具调用在 content[] 的 tool_use 块。
+
+1.9.4 的采集器 v3 另接入 Desktop 本地 Cowork：`local-agent-mode-sessions/<org>/<account>/agent/local_ditto_*/` 下的 `audit.jsonl` 与隐藏 `.claude/projects/**`。macOS、Windows Roaming/MSIX roots 由 `claudePaths.js` 发现，目录遍历剪枝 outputs/插件。audit 使用 `_audit_timestamp` 和 `session_id`；标准 transcript 的来源优先级高于 audit。同级保留更完整用量，优先级持久化到 usage_quality，重开后不降级。仅迁移重扫时观察到的消息旧键，迁移/旧键删除/游标同事务；缺源历史保留，result.modelUsage 汇总不叠加。覆盖与恢复边界见 [Desktop 调查与修复](CLAUDE-DESKTOP-AUDIT-2026-10-14.md)。
 
 **一次响应被拆成多行，只有终结块带真实 output_tokens。** 一条 assistant 消息按 content block 分行写入（`apiBlockIndex` 0..n），共享同一个 `message.id`，`input_tokens`/`cache_read_input_tokens` 每行重复，而 `output_tokens` 在前置分片里全是 0，只有最后一块是真值：
 
@@ -47,7 +49,7 @@ block3 tool_use   3594/47360/309   ← 唯一带真实输出的一行
 
 官方 Claude Code 每行都重复携带最终 output，取首行等于取最大，看不出问题；**ccmr 网关不写 `requestId`**（官方每行都写），dedup_key 退化成 `tool:msg.id`，四个分片塌成一行，"先到者胜"留下的正是 output=0 的首块。2026-09-16 实测当日丢掉 94.5% 的输出量。
 
-因此 `store.insertEvent` 的去重语义是**"输出更大的后来者补齐该行"**而非纯 `INSERT OR IGNORE`：无冲突时行为不变，且能扛住分片跨增量扫描轮次落到不同批次的情况。不采用"跳过 `stop_reason == null`"，是因为那会新增一条静默丢弃路径——某个源一旦不写该字段就整源归零，正是下面 dsh 踩过的坑。
+因此通用 `store.insertEvent` 的去重语义是**"输出更大的后来者补齐该行"**而非纯 `INSERT OR IGNORE`：无冲突时行为不变，且能扛住分片跨增量扫描轮次落到不同批次的情况。官方 Claude v3 使用专用 `upsertClaudeEvent`，先比较来源优先级，再比较同来源完整度。不采用"跳过 `stop_reason == null`"，是因为那会新增一条静默丢弃路径——某个源一旦不写该字段就整源归零，正是下面 dsh 踩过的坑。
 
 ### Codex（坑最多）
 Codex 同时读取 `.jsonl`、`.jsonl.zst` 与 `.jsonl.zstd`。压缩日志按完整快照解压重扫，不能以压缩字节数作为 JSONL 游标；三种扩展及 `sessions`/`archived_sessions` 中同 stem 副本共用 session 与事件/工具调用去重键。多帧优先由系统 `zstd` 完整解压，单帧可回落 Node 内置解压；Node 22.13 等无内置 zstd 的运行时需可用的 `zstd` CLI。

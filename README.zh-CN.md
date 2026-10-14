@@ -12,7 +12,7 @@
 
 | 工具 | 数据位置 | 能看到什么 |
 |---|---|---|
-| Claude Code | `~/.claude/projects` | 逐请求 token 明细、模型分布 |
+| Claude Code（含本地 Cowork） | `~/.claude/projects` + Desktop Cowork 日志 | 逐消息真实用量、跨格式去重 |
 | ccmr（claude-code-model-router） | `~/.claude-gateway/projects` | 同上（国产模型隔离目录，真实模型名） |
 | Codex | `~/.codex/sessions`、`archived_sessions` | token 明细、**官方配额百分比与重置时间**（5 小时 / 每周窗口）、模型（含 auto-review 子代理）、工具调用 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 逐请求明细（model_usage 表）、工具调用、**GLM Coding Plan 积分窗口**（5 小时 / 每周，官方端点） |
@@ -26,7 +26,9 @@
 | Qoder | `~/.qoder{,-cn}/projects/**/*.jsonl` | **积分账本**（上游本地不报 token，只报 credits）；若上游恢复上报 token 则自动入事件 |
 | Cursor | 账号级用量账单（CSV） | 逐请求明细（缓存三段分项）——本地无逐请求数据，用本地凭证拉官方导出 |
 
-不支持的：网页版聊天（ChatGPT/豆包/DeepSeek 网页等）——token 计数在服务端，本地无留痕，原理上不可统计。
+**Claude Desktop 覆盖范围（1.9.4）**：已验证的本地 Cowork `agent/local_ditto_*` transcript 与 audit 日志并入 Claude Code 统计，标准 transcript 优先，两种格式及镜像共用消息身份去重。自动发现 macOS、Windows Roaming 和已安装 Claude MSIX 的目录；扩展目录支持 Windows 盘符与 UNC。本地 Code 仍要求日志落在配置目录。普通 Chat、未镜像的云端会话尚无明细采集源，result 汇总也不与逐消息用量叠加。验证与升级行为见 [Claude Desktop 调查与修复](docs/CLAUDE-DESKTOP-AUDIT-2026-10-14.md)。
+
+本项目尚未提供网页版聊天（ChatGPT/豆包/DeepSeek 网页等）的 token 明细采集；不能用对话文本长度或配额百分比代替真实用量。
 
 > **口径说明**：Kimi Code / Qoder / Antigravity 均在本机真实数据上与独立重算逐条核对一致。
 > **Qoder 实测本地只报积分不报 token**（2026-09，qmodel_38max）：积分走独立账本出
@@ -273,6 +275,13 @@ Token Watcher 是**非官方**工具，解析的均为各产品留在本地的**
 - i18n / 英文 README
 
 ## 更新日志
+
+### 1.9.4（2026-10-14）
+
+- 补采已验证的 Desktop 本地 Cowork transcript/audit；按消息 ID 跨格式去重，标准 transcript 优先，镜像、重扫与重开不双计。
+- 修复 Windows 盘符、UNC 和 tilde 扩展目录校验；CLI 与配置加载共用规则。
+- 旧键合并与游标提交同事务，失败回滚、保留缺源历史；30 项定向及 863 项完整隔离回归通过。
+- Chat/未镜像云端和 result 汇总仍有覆盖边界，升级前先备份；详见 [1.9.4 说明](docs/RELEASE-1.9.4.md)。
 
 ### 1.9.3（2026-10-14）
 

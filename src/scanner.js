@@ -36,14 +36,14 @@ const COLLECTORS = {
  */
 const isSyncConflict = (name) => name.includes('.sync-conflict-') || / \(\d+\)\.[^.]+$/.test(name);
 
-async function* walkByExt(root, match) {
+async function* walkByExt(root, match, descend) {
   let entries;
   try { entries = await readdir(root, { withFileTypes: true }); }
   catch { return; }
   for (const e of entries) {
     const p = join(root, e.name);
-    if (e.isDirectory()) yield* walkByExt(p, match);
-    else if (e.isFile() && !isSyncConflict(e.name) && match(e.name)) yield p;
+    if (e.isDirectory() && (!descend || descend(p))) yield* walkByExt(p, match, descend);
+    else if (e.isFile() && !isSyncConflict(e.name) && match(e.name, p)) yield p;
   }
 }
 
@@ -68,7 +68,7 @@ async function* enumerate(source) {
     // jsonl 源可声明 match 收窄文件名（antigravity 的 brain 下只认 transcript*.jsonl，
     // 其余 jsonl（如会话元数据）不产生文件行）
     const match = source.match || ((n) => n.endsWith('.jsonl'));
-    for await (const p of walkByExt(root, match)) yield [p, null];
+    for await (const p of walkByExt(root, match, source.descend)) yield [p, null];
   }
 }
 

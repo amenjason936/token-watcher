@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { SOURCES, HOME, DATA_DIR } from './config.js';
+import { normalizeExtraRoot } from './rootPaths.js';
 
 /**
  * `token-watcher extra-roots list|add|remove` —— 多机合并镜像目录的登记台。
@@ -24,7 +25,7 @@ const writeMap = (map) => {
   writeFileSync(FILE, JSON.stringify(map, null, 2) + '\n');
 };
 
-const normalize = (p) => (p.startsWith('~/') ? join(HOME, p.slice(2)) : p);
+const normalize = (p) => normalizeExtraRoot(p, HOME);
 
 const usage = (log) => log('用法：tokenwatcher extra-roots list | add <tool> <路径> | remove <tool> <路径>');
 
@@ -41,7 +42,8 @@ export function extraRootsCommand(positionals, { log }) {
       }
       for (const [t, r] of entries) {
         const ok = SOURCES.find(s => s.tool === t && s.kind !== 'poller');
-        const live = existsSync(normalize(String(r)));
+        const normalized = normalize(r);
+        const live = normalized !== null && existsSync(normalized);
         log(`${ok ? '' : '✗ 未登记工具 '}${t}  ${r}${ok ? (live ? '' : '（目录暂不存在，首次同步后生效）') : ''}`);
       }
       return true;
@@ -55,7 +57,7 @@ export function extraRootsCommand(positionals, { log }) {
     if (src.kind === 'poller') { log(`${tool} 是账号级轮询源，没有本地目录可扩展`); return false; }
 
     const path = normalize(rawPath);
-    if (!path.startsWith('/')) { log(`路径须为绝对路径或 ~ 开头："${rawPath}"`); return false; }
+    if (path === null) { log(`路径须为绝对路径或 ~ 开头："${rawPath}"`); return false; }
 
     const map = readMap();
     const roots = Array.isArray(map[tool]) ? map[tool] : [];

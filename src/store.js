@@ -91,6 +91,7 @@ function migrate(db, dbPath) {
   const cols = db.prepare('PRAGMA table_info(events)').all().map(c => c.name);
   if (!cols.includes('trace_id')) db.exec('ALTER TABLE events ADD COLUMN trace_id TEXT');
   // Antigravity: 0=历史未知，1=字符估算，2=真实上下文+估算输出，3=逐轮真实 usage。
+  // claude-code: 1=audit 回退，2=标准 transcript；旧 0 行来自原标准解析器。
   if (!cols.includes('usage_quality')) db.exec('ALTER TABLE events ADD COLUMN usage_quality INTEGER NOT NULL DEFAULT 0');
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_events_session'").get();
   if (!idx) db.exec('CREATE INDEX idx_events_session ON events(session_id)'); // 会话钻取/模型回填高频查询
@@ -111,7 +112,7 @@ function migrate(db, dbPath) {
 
 /** 采集器可能调用的全部写方法：stageWrites() 代理这些，其余（读）直通 */
 const STAGED_WRITES = ['insertEvent', 'insertDshEvent', 'insertToolCall', 'insertCredit',
-  'saveQuota', 'dropStaleCodexRows', 'correctEventInput', 'upsertAntigravityEvent'];
+  'saveQuota', 'dropStaleCodexRows', 'correctEventInput', 'upsertAntigravityEvent', 'upsertClaudeEvent'];
 
 export class Store {
   constructor(dbPath) {
@@ -140,6 +141,14 @@ export class Store {
         output_tokens = ?, reasoning_tokens = ?, total_tokens = ?
       WHERE dedup_key = ? AND output_tokens < ?`);
     this._deleteLegacyDshEvent = this.db.prepare("DELETE FROM events WHERE tool = 'dsh' AND dedup_key = ?");
+    this._getClaudeEvent = this.db.prepare("SELECT * FROM events WHERE tool = 'claude-code' AND dedup_key = ?");
+    this._getClaudeAliases = this.db.prepare(`SELECT * FROM events
+      WHERE dedup_key >= ? AND dedup_key < ?`);
+    this._deleteClaudeAlias = this.db.prepare("DELETE FROM events WHERE id = ? AND tool = 'claude-code'");
+    this._updateClaudeEvent = this.db.prepare(`UPDATE events SET
+      ts = ?, model = ?, session_id = ?, project = ?, input_tokens = ?, cached_input = ?,
+      cache_write = ?, output_tokens = ?, reasoning_tokens = ?, total_tokens = ?, usage_quality = ?
+      WHERE dedup_key = ? AND tool = 'claude-code'`);
     this._insertToolCall = this.db.prepare(`
       INSERT OR IGNORE INTO tool_calls (ts, tool, name, session_id, dedup_key)
       VALUES (?, ?, ?, ?, ?)`);
@@ -196,6 +205,43 @@ export class Store {
       if (key !== e.dedup_key) this._deleteLegacyDshEvent.run(key);
     }
     return inserted;
+  }
+
+  /**
+   * One official message can occur in CLI, Cowork transcript, audit and mirrors.
+   * Only migrate old keys for the message actually observed in this scan. Keep
+   * missing-source history; the Scanner commits migration and cursor atomically.
+   */
+  upsertClaudeEvent(e, messageId) {
+    if (e.tool !== 'claude-code' || ![1, 2].includes(e.usage_quality) ||
+        !messageId || e.dedup_key !== `claude-code:message:${messageId}`) throw new Error('invalid Claude event');
+    const current = this._getClaudeEvent.get(e.dedup_key);
+    const prefix = `claude-code:${messageId}:`;
+    const aliases = this._getClaudeAliases.all(prefix, `claude-code:${messageId};`)
+      .filter(row => row.tool === 'claude-code' && !row.dedup_key.startsWith('claude-code:message:'));
+    let best = e;
+    for (const old of [current, ...aliases].filter(Boolean)) {
+      const candidate = { ...old, usage_quality: old.usage_quality || 2 };
+      if (candidate.usage_quality > best.usage_quality ||
+          (candidate.usage_quality === best.usage_quality &&
+            (candidate.output_tokens > best.output_tokens ||
+              (candidate.output_tokens === best.output_tokens && candidate.total_tokens >= best.total_tokens)))) best = candidate;
+    }
+    // Enrich missing metadata without changing the chosen usage or source priority.
+    const fields = ['ts', 'model', 'session_id', 'project', 'input_tokens', 'cached_input',
+      'cache_write', 'output_tokens', 'reasoning_tokens', 'total_tokens', 'usage_quality'];
+    const chosen = { ...best, model: best.model ?? e.model ?? null,
+      project: best.project ?? e.project ?? null, session_id: best.session_id ?? e.session_id ?? null };
+    if (!current) this._insertEvent.run(
+      chosen.ts, e.tool, chosen.model, chosen.session_id, chosen.project,
+      chosen.input_tokens || 0, chosen.cached_input || 0, chosen.cache_write || 0,
+      chosen.output_tokens || 0, chosen.reasoning_tokens || 0, chosen.total_tokens || 0,
+      e.dedup_key, best.trace_id ?? null);
+    if (!current || fields.some(k => (current[k] ?? null) !== (chosen[k] ?? null))) {
+      this._updateClaudeEvent.run(...fields.map(k => chosen[k] ?? null), e.dedup_key);
+    }
+    for (const row of aliases) this._deleteClaudeAlias.run(row.id);
+    return current || aliases.length ? 0 : 1;
   }
 
   saveRates(model, fresh, cache, out, turns) {
@@ -276,7 +322,7 @@ export class Store {
       const before = this.db.prepare('SELECT total_changes() n').get().n;
       for (const [name, args] of ops) {
         const r = this[name](...args);
-        if (name === 'insertEvent' || name === 'insertDshEvent' || name === 'upsertAntigravityEvent') inserted += r;
+        if (['insertEvent', 'insertDshEvent', 'upsertAntigravityEvent', 'upsertClaudeEvent'].includes(name)) inserted += r;
       }
       changed = this.db.prepare('SELECT total_changes() n').get().n > before;
       return inserted;
